@@ -1,4 +1,5 @@
 /*  An aggresively average SIMD python module
+ *  Typedefs for 16 byte vectors (16, 32 bit) and a 32 byte 32 bit vector class.
  *  Copyright (C) 2017 David Akeley
  *  
  *  This program is free software: you can redistribute it and/or modify
@@ -15,8 +16,13 @@
  *  along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#ifndef AKELEY_MEDIOCRE_PY_VEC_H_
+#define AKELEY_MEDIOCRE_PY_VEC_H_
+
 #include "stdint.h"
 #include "stddef.h"
+
+namespace MediocrePy {
 
 using u32vec4 = uint32_t __attribute__((vector_size(16)));
 using u16vec8 = uint16_t __attribute__((vector_size(16)));
@@ -77,28 +83,19 @@ class u32vec8 {
         return even_16vec | odd_16vec;
     }
     
+    // For now I just have the stuff needed for averaging and sigma checking.
+    // Add more operators if and when the need arises.
     void operator+=(u32vec8 input) {
         even += input.even;
         odd += input.odd;
-    }
-    
-    u32vec8 operator + (u32vec8 input) {
-        input += *this;
-        return input;
     }
     
     void operator/=(u32vec8 input) {
         even /= input.even;
         odd /= input.odd;
     }
-    
-    u32vec8 operator < (u32vec8 input) {
-        u32vec8 output;
-        output.even = even < input.even;
-        output.odd = odd < input.odd;
-        return output;
-    }
 };
 
-
+} // end namespace
+#endif
 
