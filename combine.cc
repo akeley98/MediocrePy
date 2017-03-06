@@ -46,6 +46,10 @@ void iround_div_array(u32vec8* arr, uint32_t div, size_t count) noexcept {
     }
 }
 
+void iround_div_array(u32vec8* lhs, u16vec8 const* rhs, size_t count) noexcept {
+    # error
+}
+
 void to_u16_array(u16vec8* lhs, u32vec8 const* rhs, size_t count) noexcept {
     INTERNAL_CHECK(count % 8 == 0);
     
