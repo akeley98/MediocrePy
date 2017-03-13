@@ -1,4 +1,25 @@
+/*  An aggresively average SIMD python module
+ *  Copyright (C) 2017 David Akeley
+ *  
+ *  This program is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *  
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ *  GNU General Public License for more details.
+ *  
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "convert.h"
+
 #include "stdint.h"
+#include "stdbool.h"
+#include "string.h"
 #include "assert.h"
 #include "emmintrin.h"
 #include "immintrin.h"
@@ -37,7 +58,7 @@ bool load_u16_from_m256(
         // are known to not properly align vectors on the stack).
         thread_local bool thread_locals_in_use;
         thread_local __m256 extra_input;
-        thread_local uint16_t[8] extra_output;
+        thread_local uint16_t extra_output[8];
         
         assert(!thread_locals_in_use);
         thread_locals_in_use = true;
@@ -60,7 +81,7 @@ bool load_u16_from_m256(
             out_as_u16[main_part + i] = extra_output[i];
         }
         
-        thread_locals_in_use = false
+        thread_locals_in_use = false;
         return main_ok & extra_ok;
     }
     
@@ -91,6 +112,7 @@ bool load_u16_from_m256(
         z, z, z, z, z, z, z, z, 13, 12, 9, 8, 5, 4, 1, 0
     );
     
+    // Walk through the arrays and do the actual conversion.
     for ( ; item_count != 0; out_as_u16 += 8, ++in_as_float, item_count -= 8) {
         const __m256 magic = _mm256_add_ps(*in_as_float, magic_float_vector);
         // High word of each float should be 0x4B00, low word should be the
@@ -115,7 +137,6 @@ bool load_u16_from_m256(
             _mm_storeu_si128((__m128i*)out_as_u16, output);
         }
     }
-    
     
     uint16_t overflow_check_words[16];
     memcpy(overflow_check_words, &overflow_check, 32);
@@ -147,20 +168,18 @@ void load_m256_from_u16(
         const size_t remainder = item_count % 8;
         const size_t main_part = item_count - remainder;
         
-        thread_local thread_locals_in_use;
-        thread_local uint16_t[8] extra_input;
+        thread_local bool thread_locals_in_use;
+        thread_local uint16_t extra_input[8];
         
         assert(!thread_locals_in_use);
         thread_locals_in_use = true;
         
         load_m256_from_u16(out_as_float, in_as_u16, main_part);
         
-        memset(extra_input, 42, sizeof extra_input);
         for (size_t i = 0; i < remainder; ++i) {
             extra_input[i] = in_as_u16[i + main_part];
         }
         load_m256_from_u16(out_as_float + main_part/8, extra_input, 8);
-        
         
         thread_locals_in_use = false;
         return;
@@ -169,6 +188,7 @@ void load_m256_from_u16(
     const __m128i zero = _mm_set1_epi16(0);
     const bool in_is_aligned = (uintptr_t)in_as_u16 % 16 == 0;
     
+    // Walk through the arrays and do the actual conversion.
     for ( ; item_count != 0; in_as_u16 += 8, ++out_as_float, item_count -= 8) {
         // So straightforward compared to the float->int conversion...
         __m128i vector_as_u16;
