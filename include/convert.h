@@ -18,9 +18,9 @@
 #ifndef MediocrePy_CONVERT_H_
 #define MediocrePy_CONVERT_H_
 
-#include "stdint.h"
-#include "stdbool.h"
-#include "assert.h"
+#include <stdint.h>
+#include <stdbool.h>
+
 #include "emmintrin.h"
 #include "immintrin.h"
 
@@ -34,8 +34,9 @@ extern "C" {
  *  to  the  nearest  integer  (with  floats halfway between two consecutive
  *  integers being rounded to the nearest even integer), and all floats must
  *  be  in  the  interval  [0,  65535.5).  Returns  true  if all floats were
- *  in-range, false if any were not. The output for an out-of-range float in
- *  unspecified, but will not crash the program.
+ *  in-range, false if any were not (in which case  errno  will  be  set  to
+ *  ERANGE).  The  output for an out-of-range float in unspecified, but will
+ *  not crash the program.
  */
 bool load_u16_from_m256(
     uint16_t* out_as_u16,
@@ -49,9 +50,9 @@ bool load_u16_from_m256(
  *  floats  past  the  end of the array up to the next 256 bit boundary will
  *  have an unspecified value (e.g., if item_count is 42, the function  will
  *  write  48  floats  (6  _mm256  vectors)  to the output array. The last 6
- *  floats will have an unspecified value.
+ *  floats will have an unspecified value. Always returns true.
  */
-void load_m256_from_u16(
+bool load_m256_from_u16(
     __m256* out_as_float,
     uint16_t const* in_as_u16,
     size_t item_count
