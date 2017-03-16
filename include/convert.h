@@ -28,6 +28,8 @@
 extern "C" {
 #endif
 
+
+
 /*  Convert an array of item_count  32-bit  floats  (passed  as  __m256*,  a
  *  pointer to 256-bit aligned memory) to an array of item_count unsigned 16
  *  bit integers. In the default rounding mode, the floats will  be  rounded

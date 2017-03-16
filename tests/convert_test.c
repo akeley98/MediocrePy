@@ -16,8 +16,8 @@
  *  along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <stdbool.h>
 #include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -26,6 +26,12 @@
 
 static struct timeb timer_begin;
 static struct Random* generator;
+
+static void print_timer_elapsed(struct timeb before, size_t item_count) {
+    long ms = ms_elapsed(before);
+    double ns_per_item = (double)ms * 1e6 / (double)item_count;
+    printf("        %lims elapsed (%4.2fns per item).\n", ms, ns_per_item);
+}
 
 static void test_load_u16(size_t count, bool is_aligned, bool expect_okay) {
     printf("Converting %zi floats to uint16_t (%s).\n",
@@ -55,12 +61,10 @@ static void test_load_u16(size_t count, bool is_aligned, bool expect_okay) {
     for (size_t i = 0; i < count; ++i) {
         m256_as_float[i] = random_u32(generator) / 65536.6f;
     }
-    
     // Add canaries to the end of the u16_array. We expect them not to change.
     for (size_t i = 0; i < 16; ++i) {
         u16_array[i + count] = (uint16_t)(1000 + i);
     }
-    
     // If we expect an error, randomly select one of the floats to replace
     // with an out-of-range float.
     float bad_float = 0.0f;
@@ -77,7 +81,7 @@ static void test_load_u16(size_t count, bool is_aligned, bool expect_okay) {
     
     ftime(&timer_begin);
     bool okay = load_u16_from_m256(u16_array, m256_array, count);
-    printf("        %lims elapsed\n", ms_elapsed(timer_begin));
+    print_timer_elapsed(timer_begin, count);
     
     for (size_t i = 0; i < count; ++i) {
         if ((int)(u16_array[i]) != (int)(nearbyintf(m256_as_float[i]))) {
@@ -136,7 +140,7 @@ static void test_load_m256(size_t count, bool is_aligned) {
     
     ftime(&timer_begin);
     load_m256_from_u16(m256_array, u16_array, count);
-    printf("        %lims elapsed\n", ms_elapsed(timer_begin));
+    print_timer_elapsed(timer_begin, count);
     
     // Check that the arrays are equal.
     for (size_t i = 0; i < count; ++i) {

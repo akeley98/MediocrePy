@@ -18,9 +18,15 @@
 #ifndef MediocrePy_MEAN_H_
 #define MediocrePy_MEAN_H_
 
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <emmintrin.h>
 #include <immintrin.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 bool mediocre_mean_u16(
     uint16_t* out,
@@ -28,6 +34,20 @@ bool mediocre_mean_u16(
     size_t array_count,
     size_t bin_count
 );
+
+bool mediocre_clipped_mean_u16(
+    uint16_t* out,
+    uint16_t const* const* data,
+    size_t array_count,
+    size_t bin_count,
+    double sigma_lower,
+    double sigma_upper,
+    size_t max_iter
+);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 

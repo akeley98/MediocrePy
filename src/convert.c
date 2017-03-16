@@ -25,6 +25,8 @@
 #include <emmintrin.h>
 #include <immintrin.h>
 
+#include <stdio.h> // XXX
+
 /*  Convert an array of item_count  32-bit  floats  (passed  as  __m256*,  a
  *  pointer to 256-bit aligned memory) to an array of item_count unsigned 16
  *  bit integers. In the default rounding mode, the floats will  be  rounded
@@ -60,7 +62,8 @@ bool load_u16_from_m256(
         __m256* extra_input;
         assert(sizeof(*extra_input) == 32);
         char buffer[2 * 32];
-        extra_input = (__m256*)(&buffer + 32 - ((uintptr_t)&buffer % 32));
+        char* aligned_buffer = &buffer[32 - ((uintptr_t)&buffer % 32)];
+        extra_input = (__m256*)(aligned_buffer);
         
         // It's safe to dereference the extra garbage floats because the
         // __m256 items must be aligned to 32 bytes, so we will never cross
@@ -190,9 +193,9 @@ bool load_m256_from_u16(
         // So straightforward compared to the float->int conversion...
         __m128i vector_as_u16;
         if (in_is_aligned) {
-            vector_as_u16 = _mm_lddqu_si128((__m128i const*)in_as_u16);
+            vector_as_u16 = _mm_load_si128((__m128i const*)in_as_u16);
         } else {
-            vector_as_u16 = _mm_loadu_si128((__m128i const*)in_as_u16);
+            vector_as_u16 = _mm_lddqu_si128((__m128i const*)in_as_u16);
         } // Again, clang should hoist these ifs out of the loop.
         
         __m128i low_as_u32 = _mm_unpacklo_epi16(vector_as_u16, zero);

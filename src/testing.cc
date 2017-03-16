@@ -21,8 +21,11 @@
 #include "testing.h"
 
 #include <random>
+#include <vector>
+#include <algorithm>
 
 static std::random_device the_random_device;
+static std::uniform_int_distribution<uint32_t> dist;
 
 extern "C" {
 
@@ -46,8 +49,37 @@ uint32_t random_u32(Random* generator) noexcept {
     return static_cast<uint32_t>(generator->generator());
 }
 
+uint32_t random_dist_u32(
+    Random* generator, uint32_t min_inclusive, uint32_t max_inclusive
+) noexcept {
+    return static_cast<uint32_t>(
+        dist(
+            generator->generator,
+            decltype(dist)::param_type{ min_inclusive, max_inclusive }
+        )
+    );
+}
+
 uint64_t get_seed(Random const* generator) noexcept {
     return generator->seed;
+}
+
+void shuffle_u32(Random* r, uint32_t* array, size_t bin_count) noexcept {
+    struct Thing {
+        uint32_t weight, data;
+        bool operator<(Thing other) const {
+            return weight < other.weight;
+        }
+    };
+    std::vector<Thing> vec;
+    vec.reserve(bin_count);
+    for (size_t i = 0; i < bin_count; ++i) {
+        vec.push_back({ static_cast<uint32_t>(r->generator()), array[i] });
+    }
+    std::sort(vec.begin(), vec.end());
+    for (size_t i = 0; i < bin_count; ++i) {
+        array[i] = vec[i].data;
+    }
 }
 
 void delete_random(Random* generator) noexcept {

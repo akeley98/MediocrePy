@@ -19,8 +19,9 @@
 
 #include <assert.h>
 #include <errno.h>
-#include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
+#include <stdlib.h>
 #include <immintrin.h>
 #include <emmintrin.h>
 
@@ -38,31 +39,55 @@ bool mediocre_mean_u16(
     }
     // vector_count is the number of __m256 vectors needed to store bin_count
     // floats. This is equal to bin_count / 8, rounded up.
-    const size_t vector_count = (bin_count + 7) & ~7;
+    const size_t vector_count = (bin_count + 7) / 8;
     
-    // accumulator is the buffer where we will be adding up and dividing data
-    // to compute the mean. converted is the buffer we will use for conversions
-    // from uint16_t to __mm256.
-    __m256* allocated = NULL;
-    __m256* accumulator = NULL;
-    __m256* converted = NULL;
+    // accumulator is the buffer that we will use to sum up each lane of
+    // the input arrays.
+    // i.e. accumulator[n] = sum(data[i][n] for i := 0 to bin_count - 1)
+    __m256* accumulator = aligned_alloc(
+        sizeof(__m256), vector_count * sizeof(__m256));
     
-    // accumulator and converted buffers will share on allocation.
-    allocated = aligned_alloc(vector_count * sizeof(__m256) * 2);
-    if (allocated == NULL) {
+    if (accumulator == NULL) {
         assert(errno == ENOMEM);
         return false;
     }
-    accumulator = allocated;
-    converted = allocated + vector_count;
     
-    memset(accumulator, 0, vector_count * sizeof(__m256));
+    load_m256_from_u16(accumulator, data[0], bin_count);
     
-    for (size_t a = 0; a < array_count; ++a) {
-        load_m256_from_u16(converted, data[a], bin_count);
+    const size_t extra_bytes_count = (bin_count % 8) * sizeof(uint16_t);
+    const __m128i zero = _mm_set1_epi16(0);
+    
+    for (size_t a = 1; a < array_count; ++a) {
+        size_t i = vector_count - 1;
+        __m256* accumulator_ptr = accumulator + i;
+        __m128i const* current_data_array = (__m128i const*)data[a];
+        __m128i const* data_ptr;
+        __m128i extra_data;
         
-        for (size_t i = 0; i < vector_count; ++i) {
-            accumulator[i] = _mm_add_ps(accumulator[i], converted[i]);
+        if (extra_bytes_count == 0) {
+            data_ptr = current_data_array + i;
+        } else {
+            data_ptr = &extra_data;
+            memcpy(&extra_data, current_data_array + i, extra_bytes_count);
+        }
+        
+        while (true) {
+            __m128i data = _mm_lddqu_si128(data_ptr);
+            __m128i low_as_u32 = _mm_unpacklo_epi16(data, zero);
+            __m128i high_as_u32 = _mm_unpackhi_epi16(data, zero);
+            __m256 to_add = _mm256_set_m128(
+                _mm_cvtepi32_ps(high_as_u32), _mm_cvtepi32_ps(low_as_u32)
+            );
+            
+            *accumulator_ptr = _mm256_add_ps(*accumulator_ptr, to_add);
+            
+            if (i == 0) {
+                break;
+            } else {
+                --i;
+                --accumulator_ptr;
+                data_ptr = current_data_array + i;
+            }
         }
     }
     
@@ -73,7 +98,7 @@ bool mediocre_mean_u16(
     
     load_u16_from_m256(out, accumulator, bin_count);
     
-    free(allocated);
+    free(accumulator);
     return true;
 }
 

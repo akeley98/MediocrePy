@@ -19,11 +19,12 @@
 #ifndef MediocrePy_TEST_UTILS_H_
 #define MediocrePy_TEST_UTILS_H_
 
+#include <stddef.h>
 #include <stdint.h>
 #include <sys/timeb.h>
 
 #ifdef noexcept
-#error "noexcept macro defined"
+#error "noexcept keyword redefined as macro"
 #endif
 
 #ifdef __cplusplus
@@ -36,9 +37,18 @@ extern "C" {
 struct Random;
 
 struct Random* new_random() noexcept;
+
 struct Random* new_random1(uint64_t seed) noexcept;
+
 uint32_t random_u32(struct Random* generator) noexcept;
+
+uint32_t random_dist_u32(
+    struct Random*, uint32_t min_inclusive, uint32_t max_inclusive) noexcept;
+
 uint64_t get_seed(struct Random const* generator) noexcept;
+
+void shuffle_u32(struct Random*, uint32_t* array, size_t bin_count) noexcept;
+
 void delete_random(struct Random* generator) noexcept;
 
 // Return the difference between the current time and the timeb passed as an
