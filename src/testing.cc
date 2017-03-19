@@ -20,9 +20,14 @@
 
 #include "testing.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+
+#include <algorithm>
 #include <random>
 #include <vector>
-#include <algorithm>
 
 static std::random_device the_random_device;
 static std::uniform_int_distribution<uint32_t> dist;
@@ -84,6 +89,105 @@ void shuffle_u32(Random* r, uint32_t* array, size_t bin_count) noexcept {
 
 void delete_random(Random* generator) noexcept {
     delete generator;
+}
+
+/*  Initialize a canary page with space for data_size bytes of  data  and  a
+ *  canary  of  canary_size bytes. The canary is optional and is useful only
+ *  for substituting segfaults for softer errors. If the canary is set to  0
+ *  bytes,  all  overruns  will  immediately result in a hard crash. Get the
+ *  pointer to your data array by getting the .ptr  member  of  the  struct.
+ *  Returns -1 if the struct could not be initialized, 0 if all is well.
+ */
+int init_canary_page (
+    struct CanaryPage* out,
+    size_t data_size,
+    size_t canary_size
+) noexcept {
+    static unsigned seed;    
+    // Total room needed to store 3 useful parts + rounded up to multiple
+    // of 4096 bytes as required by mmap.
+    size_t mapped_size = (4096 + data_size + canary_size + 4095) & ~4095;
+    
+    // If the user requested canary bytes, remember some random canary
+    // bytes in a separate malloc'd buffer. Later we will copy this to the
+    // end of the user's data space, and even later we will check the
+    // malloc'd buffer with the canaries at the end of the user's data
+    // space to check for overruns.
+    unsigned char* canary_data = NULL;
+    if (canary_size != 0) {
+        canary_data = (unsigned char*)malloc(canary_size);
+        if (canary_data == NULL) {
+            return -1;
+        }
+        for (size_t i = 0; i < canary_size; ++i) {
+            canary_data[i] = (unsigned char)rand_r(&seed);
+        }
+    }
+    
+    void* page = mmap(
+        NULL, mapped_size, PROT_READ|PROT_WRITE,
+        MAP_PRIVATE|MAP_ANONYMOUS, -1, 0
+    );
+    
+    if (page == MAP_FAILED) {
+        free(canary_data);
+        perror("init_canary_page mmap");
+        return -1;
+    }
+    
+    // The CanaryPage spans several pages (4096 bytes each) in computer memory.
+    // This space is split into 4 regions: the guard page, the canary, the
+    // data portion, and unused space needed to align to 4096 bytes. If the
+    // user overruns the data buffer by <= canary_size bytes, that will be
+    // detected when we compare the canary bytes. If the user overruns past
+    // that, they will touch the guard page and get a segmentation fault.
+    void* end_page = (char*)page + mapped_size;
+    void* guard_page = (char*)end_page - 4096;
+    void* canary_ptr = (char*)guard_page - canary_size;
+    void* data_ptr = (char*)canary_ptr - data_size;
+    
+    // Make it so that anyone who touches the guard page dies.
+    mprotect(guard_page, 4096, PROT_NONE);
+    
+    if (canary_size != 0) {
+        memcpy(canary_ptr, canary_data, canary_size);
+    }
+    
+    *out = {
+        data_ptr,
+        page,
+        mapped_size,
+        canary_data,
+        canary_size
+    };
+    return 0;
+}
+
+/*  Returns -1 if the canary bytes don't match, 0  if  they  do,  or  if  no
+ *  canary bytes were allocated in the first place.
+ */
+int check_canary_page(struct CanaryPage cp) noexcept {
+    // Recover the position of the canary in the mmap'd portion.
+    // (It's towards the end of the area, before the 4096 byte guard page).
+    unsigned char* canary = ((unsigned char*)cp.mapped_ 
+        + cp.mapped_length_ - 4096 - cp.canary_length_
+    );
+    int result = 0;
+    for (size_t i = 0; i < cp.canary_length_; ++i) {
+        if (cp.canary_data_[i] != canary[i]) {
+            result = -1;
+            fprintf(stderr, "check_canary_page: [%zi] overwritten by 0x%02X\n",
+                i, canary[i]);
+        }
+    }
+    return result;
+}
+
+// Frees the memory used by a canary page. Always returns 0.
+int free_canary_page(struct CanaryPage cp) noexcept {
+    free(cp.canary_data_);
+    munmap(cp.mapped_, cp.mapped_length_);
+    return 0;
 }
 
 } // end extern "C"

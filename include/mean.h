@@ -28,14 +28,24 @@
 extern "C" {
 #endif
 
-bool mediocre_mean_u16(
+int mediocre_mean_u16(
     uint16_t* out,
     uint16_t const* const* data,
     size_t array_count,
     size_t bin_count
 );
 
-bool mediocre_clipped_mean_u16(
+static inline int mediocre_mean_mu16(
+    uint16_t* out,
+    uint16_t* const* data,
+    size_t array_count,
+    size_t bin_count
+) {
+    uint16_t const* const* const_data = (uint16_t const* const*)data;
+    return mediocre_mean_u16(out, const_data, array_count, bin_count);
+}
+
+int mediocre_clipped_mean_u16(
     uint16_t* out,
     uint16_t const* const* data,
     size_t array_count,

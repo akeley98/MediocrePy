@@ -2,8 +2,8 @@ CC = clang -mavx -O2 -S -std=c11 -Wall -Wextra -I include
 CC4 = clang -mavx -O3 -S -std=c11 -Wall -Wextra -I include
 Cxx = clang -mavx -O2 -S -std=c++11 -Wall -Wextra -I include
 
-LinkLib = clang -lm -shared
-LinkTest = clang++ 
+LinkLib = clang -g -lm -shared
+LinkTest = clang++ -g
 
 # bin/ is a bit of a misnomer since I'm really compiling to assembly instead of
 # object files, so that I can see what the hell the compiler is actually up to.

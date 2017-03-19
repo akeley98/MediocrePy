@@ -32,12 +32,12 @@
  *  bit integers. In the default rounding mode, the floats will  be  rounded
  *  to  the  nearest  integer  (with  floats halfway between two consecutive
  *  integers being rounded to the nearest even integer), and all floats must
- *  be  in  the  interval  [0,  65535.5).  Returns  true  if all floats were
- *  in-range, false if any were not (in which case  errno  will  be  set  to
- *  ERANGE).  The  output for an out-of-range float in unspecified, but will
- *  not crash the program.
+ *  be  in the interval [0, 65535.5). Returns 0 if all floats were in-range,
+ *  -1 if any were not (in which case errno will  be  set  to  ERANGE).  The
+ *  output  for an out-of-range float in unspecified, but will not crash the
+ *  program.
  */
-bool load_u16_from_m256(
+int load_u16_from_m256(
     uint16_t* out_as_u16,
     __m256 const* in_as_float,
     size_t item_count
@@ -84,7 +84,7 @@ bool load_u16_from_m256(
         }
         // Recursive call will set errno if something went wrong.
         // We are responsible only for forwarding both calls' return codes.
-        return main_ok & extra_ok;
+        return main_ok | extra_ok;
     }
     
     // magic_float = 2 ** 23. 2 ** 23 + n for any float n in [0, 65535.5)
@@ -146,10 +146,10 @@ bool load_u16_from_m256(
     for (int i = 1; i < 16; i += 2) {
         if (overflow_check_words[i] != 0) {
             errno = ERANGE;
-            return false;
+            return -1;
         }
     }
-    return true;
+    return 0;
 }
 
 /*  Convert an array of item_count 16-bit  unsigned  ints  to  an  array  of
@@ -158,17 +158,30 @@ bool load_u16_from_m256(
  *  floats  past  the  end of the array up to the next 256 bit boundary will
  *  have an unspecified value (e.g., if item_count is 42, the function  will
  *  write  48  floats  (6  _mm256  vectors)  to the output array. The last 6
- *  floats will have an unspecified value. Always returns true.
+ *  floats will have an unspecified value). Always returns 0.
  */
-bool load_m256_from_u16(
+int load_m256_from_u16(
     __m256* out_as_float,
     uint16_t const* in_as_u16,
     size_t item_count
 ) {
     if (item_count % 8 != 0) {
-        // Use a similar strategy as load_u16_from_m256.
-        // Read the comments there before meddling with the code.
-        // (This includes you, the amnesic original author of the code).
+        // To handle cases where item_count is not an exact multiple of 8,
+        // split the work into two parts: the "main part", which is all of
+        // the items up to the biggest multiple of 8 under the item_count
+        // (e.g. the first 80 items of an 83 item array), and the "remainder",
+        // which are the last 1 to 7 items not handled in the main part. To
+        // handle the main part, just call ourselves recursively with the
+        // same pointers but with item_count rounded down to a multiple of 8.
+        // For the remainder, we copy the last few items to a temporary array
+        // 8 integers wide (we have to be careful not to read past the end of
+        // the input array, because it might be pushed up against a page
+        // boundary or otherwise unsafe to read), and call ourselves recursively
+        // with 8 as the item_count (unlike for the input array, it IS safe to
+        // write past the end of the output array by a few items, because we
+        // stated in the function description that the last few items up to a
+        // 256 bit boundary will have unspecified value, and each __m256 is
+        // aligned, so it won't cross a page boundary into unmapped memory.
         const size_t remainder = item_count % 8;
         const size_t main_part = item_count - remainder;
         
@@ -182,7 +195,7 @@ bool load_m256_from_u16(
         }
         load_m256_from_u16(extra_output, extra_input, 8);
         
-        return true;
+        return 0;
     }
     
     const __m128i zero = _mm_set1_epi16(0);
@@ -205,6 +218,64 @@ bool load_m256_from_u16(
             _mm_cvtepi32_ps(high_as_u32), _mm_cvtepi32_ps(low_as_u32)
         );
     }
-    return true;
+    return 0;
+}
+
+/*  Increases each float in the output  array  of  size  item_count  by  the
+ *  corresponding 16-bit unsigned int in the input array of size item_count.
+ *  If the array size is not an exact multiple of 8, the extra  floats  past
+ *  the end of the output array up to the next 256-bit boundary will have an
+ *  unspecified value (e.g., if item_count  is  77,  80  floats  (10  __m256
+ *  vectors)  will  be  written,  and the 3 floats past the end of the float
+ *  array will have unspecified value). Always returns 0.
+ */
+int iadd_m256_by_u16(
+    __m256* to_increase,
+    uint16_t const* in_as_u16,
+    size_t item_count
+) {
+    // The function is mostly copied from the load_m256_from_u16 function.
+    // The structure is basically the same so I won't repeat the gigantic
+    // comment again here.
+    if (item_count % 8 != 0) {
+        const size_t remainder = item_count % 8;
+        const size_t main_part = item_count - remainder;
+        
+        __m256* extra_part = to_increase + main_part/8;
+        uint16_t extra_input[8];
+        
+        iadd_m256_by_u16(to_increase, in_as_u16, main_part);
+        
+        for (size_t i = 0; i < remainder; ++i) {
+            extra_input[i] = in_as_u16[i + main_part];
+        }
+        iadd_m256_by_u16(extra_part, extra_input, 8);
+        
+        return 0;
+    }
+    
+    const __m128i zero = _mm_set1_epi16(0);
+    const bool in_is_aligned = (uintptr_t)in_as_u16 % 16 == 0;
+    
+    for ( ; item_count != 0; in_as_u16 += 8, ++to_increase, item_count -= 8) {
+        const __m256 before_increment = *to_increase;
+        
+        __m128i vector_as_u16;
+        if (in_is_aligned) {
+            vector_as_u16 = _mm_load_si128((__m128i const*)in_as_u16);
+        } else {
+            vector_as_u16 = _mm_lddqu_si128((__m128i const*)in_as_u16);
+        }
+        
+        __m128i low_as_u32 = _mm_unpacklo_epi16(vector_as_u16, zero);
+        __m128i high_as_u32 = _mm_unpackhi_epi16(vector_as_u16, zero);
+        
+        const __m256 floats_to_add = _mm256_set_m128(
+            _mm_cvtepi32_ps(high_as_u32), _mm_cvtepi32_ps(low_as_u32)
+        );
+        
+        *to_increase = _mm256_add_ps(before_increment, floats_to_add);
+    }
+    return 0;
 }
 

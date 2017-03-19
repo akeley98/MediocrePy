@@ -28,19 +28,17 @@
 extern "C" {
 #endif
 
-
-
 /*  Convert an array of item_count  32-bit  floats  (passed  as  __m256*,  a
  *  pointer to 256-bit aligned memory) to an array of item_count unsigned 16
  *  bit integers. In the default rounding mode, the floats will  be  rounded
  *  to  the  nearest  integer  (with  floats halfway between two consecutive
  *  integers being rounded to the nearest even integer), and all floats must
- *  be  in  the  interval  [0,  65535.5).  Returns  true  if all floats were
- *  in-range, false if any were not (in which case  errno  will  be  set  to
- *  ERANGE).  The  output for an out-of-range float in unspecified, but will
- *  not crash the program.
+ *  be  in the interval [0, 65535.5). Returns 0 if all floats were in-range,
+ *  -1 if any were not (in which case errno will  be  set  to  ERANGE).  The
+ *  output  for an out-of-range float in unspecified, but will not crash the
+ *  program.
  */
-bool load_u16_from_m256(
+int load_u16_from_m256(
     uint16_t* out_as_u16,
     __m256 const* in_as_float,
     size_t item_count
@@ -52,10 +50,24 @@ bool load_u16_from_m256(
  *  floats  past  the  end of the array up to the next 256 bit boundary will
  *  have an unspecified value (e.g., if item_count is 42, the function  will
  *  write  48  floats  (6  _mm256  vectors)  to the output array. The last 6
- *  floats will have an unspecified value. Always returns true.
+ *  floats will have an unspecified value). Always returns 0.
  */
-bool load_m256_from_u16(
+int load_m256_from_u16(
     __m256* out_as_float,
+    uint16_t const* in_as_u16,
+    size_t item_count
+);
+
+/*  Increases each float in the output  array  of  size  item_count  by  the
+ *  corresponding 16-bit unsigned int in the input array of size item_count.
+ *  If the array size is not an exact multiple of 8, the extra  floats  past
+ *  the end of the output array up to the next 256-bit boundary will have an
+ *  unspecified value (e.g., if item_count  is  77,  80  floats  (10  __m256
+ *  vectors)  will  be  written,  and the 3 floats past the end of the float
+ *  array will have unspecified value). Always returns 0.
+ */
+int iadd_m256_by_u16(
+    __m256* to_increase,
     uint16_t const* in_as_u16,
     size_t item_count
 );

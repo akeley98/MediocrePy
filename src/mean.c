@@ -27,7 +27,7 @@
 
 #include "convert.h"
 
-bool mediocre_mean_u16(
+int mediocre_mean_u16(
     uint16_t* out,
     uint16_t const* const* data,
     size_t array_count,
@@ -35,7 +35,7 @@ bool mediocre_mean_u16(
 ) {
     if (array_count == 0 || bin_count == 0) {
         errno = EINVAL;
-        return false;
+        return -1;
     }
     // vector_count is the number of __m256 vectors needed to store bin_count
     // floats. This is equal to bin_count / 8, rounded up.
@@ -49,46 +49,13 @@ bool mediocre_mean_u16(
     
     if (accumulator == NULL) {
         assert(errno == ENOMEM);
-        return false;
+        return -1;
     }
     
     load_m256_from_u16(accumulator, data[0], bin_count);
     
-    const size_t extra_bytes_count = (bin_count % 8) * sizeof(uint16_t);
-    const __m128i zero = _mm_set1_epi16(0);
-    
     for (size_t a = 1; a < array_count; ++a) {
-        size_t i = vector_count - 1;
-        __m256* accumulator_ptr = accumulator + i;
-        __m128i const* current_data_array = (__m128i const*)data[a];
-        __m128i const* data_ptr;
-        __m128i extra_data;
-        
-        if (extra_bytes_count == 0) {
-            data_ptr = current_data_array + i;
-        } else {
-            data_ptr = &extra_data;
-            memcpy(&extra_data, current_data_array + i, extra_bytes_count);
-        }
-        
-        while (true) {
-            __m128i data = _mm_lddqu_si128(data_ptr);
-            __m128i low_as_u32 = _mm_unpacklo_epi16(data, zero);
-            __m128i high_as_u32 = _mm_unpackhi_epi16(data, zero);
-            __m256 to_add = _mm256_set_m128(
-                _mm_cvtepi32_ps(high_as_u32), _mm_cvtepi32_ps(low_as_u32)
-            );
-            
-            *accumulator_ptr = _mm256_add_ps(*accumulator_ptr, to_add);
-            
-            if (i == 0) {
-                break;
-            } else {
-                --i;
-                --accumulator_ptr;
-                data_ptr = current_data_array + i;
-            }
-        }
+        iadd_m256_by_u16(accumulator, data[a], bin_count);
     }
     
     __m256 divisor_vector = _mm256_set1_ps((float)array_count);
@@ -99,6 +66,6 @@ bool mediocre_mean_u16(
     load_u16_from_m256(out, accumulator, bin_count);
     
     free(accumulator);
-    return true;
+    return 0;
 }
 
