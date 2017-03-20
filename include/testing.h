@@ -16,8 +16,8 @@
  *  along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef MediocrePy_TEST_UTILS_H_
-#define MediocrePy_TEST_UTILS_H_
+#ifndef MediocrePy_TESTING_H_
+#define MediocrePy_TESTING_H_
 
 #include <stddef.h>
 #include <stdint.h>
@@ -99,7 +99,7 @@ struct CanaryPage {
 
 /*  Initialize a canary page with space for data_size bytes of  data  and  a
  *  canary  of  canary_size bytes. The canary is optional and is useful only
- *  for substituting segfaults for softer errors. If the canary is set to  0
+ *  for substituting segfaults with softer errors. If the canary is set to 0
  *  bytes,  all  overruns  will  immediately result in a hard crash. Get the
  *  pointer to your data array by getting the .ptr  member  of  the  struct.
  *  Returns -1 if the struct could not be initialized, 0 if all is well.

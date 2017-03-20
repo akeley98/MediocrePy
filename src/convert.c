@@ -25,7 +25,7 @@
 #include <emmintrin.h>
 #include <immintrin.h>
 
-#include <stdio.h> // XXX
+#include <stdio.h>
 
 /*  Convert an array of item_count  32-bit  floats  (passed  as  __m256*,  a
  *  pointer to 256-bit aligned memory) to an array of item_count unsigned 16
@@ -37,10 +37,11 @@
  *  output  for an out-of-range float in unspecified, but will not crash the
  *  program.
  */
-int load_u16_from_m256(
+int load_u16_from_m256_stride(
     uint16_t* out_as_u16,
     __m256 const* in_as_float,
-    size_t item_count
+    size_t item_count,
+    long input_stride
 ) {
     if (item_count % 8 != 0) {
         // We will handle arrays that are not exactly multiples of 8 items long
@@ -53,6 +54,7 @@ int load_u16_from_m256(
         // integers in that buffer to the end of the output array.
         const size_t remainder = item_count % 8;
         const size_t main_part = item_count - remainder;
+        const size_t istr = (size_t)input_stride;
         
         // The temporary buffers for the remaining items.
         // Some compilers are known to not properly align vectorized types
@@ -68,7 +70,7 @@ int load_u16_from_m256(
         // It's safe to dereference the extra garbage floats because the
         // __m256 items must be aligned to 32 bytes, so we will never cross
         // a page boundary into a page we are not allowed to access.
-        *extra_input = in_as_float[main_part / 8];
+        *extra_input = in_as_float[main_part * istr/ 8];
         for (size_t i = remainder; i < 8; ++i) {
             // FYI we zero out these numbers just in case the garbage values
             // were not representable as 16 bit integers. This prevents false
@@ -76,15 +78,18 @@ int load_u16_from_m256(
             ((float*)extra_input)[i] = 0.0f;
             
         }
-        bool main_ok = load_u16_from_m256(out_as_u16, in_as_float, main_part);
-        bool extra_ok = load_u16_from_m256(extra_output, extra_input, 8);
-        
+        int code0 = load_u16_from_m256_stride(
+            out_as_u16, in_as_float, main_part, istr
+        );
+        int code1 = load_u16_from_m256_stride(
+            extra_output, extra_input, 8, istr
+        );
         for (size_t i = 0; i < remainder; ++i) {
             out_as_u16[main_part + i] = extra_output[i];
         }
         // Recursive call will set errno if something went wrong.
         // We are responsible only for forwarding both calls' return codes.
-        return main_ok | extra_ok;
+        return code0 | code1;
     }
     
     // magic_float = 2 ** 23. 2 ** 23 + n for any float n in [0, 65535.5)
@@ -113,7 +118,7 @@ int load_u16_from_m256(
     );
     
     // Walk through the arrays and do the actual conversion.
-    for ( ; item_count != 0; out_as_u16 += 8, ++in_as_float, item_count -= 8) {
+    while (item_count != 0) {
         const __m256 magic = _mm256_add_ps(*in_as_float, magic_float_vector);
         // High word of each float should be 0x4B00, low word should be the
         // 16 bit integer that we want. Check the high word using xor and or
@@ -136,6 +141,10 @@ int load_u16_from_m256(
         } else {
             _mm_storeu_si128((__m128i*)out_as_u16, output);
         }
+        
+        in_as_float += input_stride;
+        out_as_u16 += 8;
+        item_count -= 8;
     }
     // Each float vector was xor'd with 0x4B000000 before being or'd to
     // the overflow_check vector. Check every high 16-bit word (odd-numbered
@@ -160,10 +169,11 @@ int load_u16_from_m256(
  *  write  48  floats  (6  _mm256  vectors)  to the output array. The last 6
  *  floats will have an unspecified value). Always returns 0.
  */
-int load_m256_from_u16(
+int load_m256_from_u16_stride(
     __m256* out_as_float,
     uint16_t const* in_as_u16,
-    size_t item_count
+    size_t item_count,
+    long output_stride
 ) {
     if (item_count % 8 != 0) {
         // To handle cases where item_count is not an exact multiple of 8,
@@ -184,16 +194,17 @@ int load_m256_from_u16(
         // aligned, so it won't cross a page boundary into unmapped memory.
         const size_t remainder = item_count % 8;
         const size_t main_part = item_count - remainder;
+        const size_t os = (size_t)output_stride;
         
-        __m256* extra_output = out_as_float + main_part/8;
+        __m256* extra_output = out_as_float + main_part*os/8;
         uint16_t extra_input[8];
         
-        load_m256_from_u16(out_as_float, in_as_u16, main_part);
+        load_m256_from_u16_stride(out_as_float, in_as_u16, main_part, os);
         
         for (size_t i = 0; i < remainder; ++i) {
             extra_input[i] = in_as_u16[i + main_part];
         }
-        load_m256_from_u16(extra_output, extra_input, 8);
+        load_m256_from_u16_stride(extra_output, extra_input, 8, os);
         
         return 0;
     }
@@ -202,7 +213,7 @@ int load_m256_from_u16(
     const bool in_is_aligned = (uintptr_t)in_as_u16 % 16 == 0;
     
     // Walk through the arrays and do the actual conversion.
-    for ( ; item_count != 0; in_as_u16 += 8, ++out_as_float, item_count -= 8) {
+    while (item_count != 0) {
         // So straightforward compared to the float->int conversion...
         __m128i vector_as_u16;
         if (in_is_aligned) {
@@ -217,6 +228,10 @@ int load_m256_from_u16(
         *out_as_float = _mm256_set_m128(
             _mm_cvtepi32_ps(high_as_u32), _mm_cvtepi32_ps(low_as_u32)
         );
+        
+        out_as_float += output_stride;
+        in_as_u16 += 8;
+        item_count -= 8;
     }
     return 0;
 }
@@ -229,10 +244,11 @@ int load_m256_from_u16(
  *  vectors)  will  be  written,  and the 3 floats past the end of the float
  *  array will have unspecified value). Always returns 0.
  */
-int iadd_m256_by_u16(
+int iadd_m256_by_u16_stride(
     __m256* to_increase,
     uint16_t const* in_as_u16,
-    size_t item_count
+    size_t item_count,
+    long output_stride
 ) {
     // The function is mostly copied from the load_m256_from_u16 function.
     // The structure is basically the same so I won't repeat the gigantic
@@ -240,16 +256,17 @@ int iadd_m256_by_u16(
     if (item_count % 8 != 0) {
         const size_t remainder = item_count % 8;
         const size_t main_part = item_count - remainder;
+        const size_t os = (size_t)output_stride;
         
-        __m256* extra_part = to_increase + main_part/8;
+        __m256* extra_part = to_increase + main_part*os/8;
         uint16_t extra_input[8];
         
-        iadd_m256_by_u16(to_increase, in_as_u16, main_part);
+        iadd_m256_by_u16_stride(to_increase, in_as_u16, main_part, os);
         
         for (size_t i = 0; i < remainder; ++i) {
             extra_input[i] = in_as_u16[i + main_part];
         }
-        iadd_m256_by_u16(extra_part, extra_input, 8);
+        iadd_m256_by_u16_stride(extra_part, extra_input, 8, os);
         
         return 0;
     }
@@ -257,7 +274,7 @@ int iadd_m256_by_u16(
     const __m128i zero = _mm_set1_epi16(0);
     const bool in_is_aligned = (uintptr_t)in_as_u16 % 16 == 0;
     
-    for ( ; item_count != 0; in_as_u16 += 8, ++to_increase, item_count -= 8) {
+    while (item_count != 0) {
         const __m256 before_increment = *to_increase;
         
         __m128i vector_as_u16;
@@ -275,6 +292,10 @@ int iadd_m256_by_u16(
         );
         
         *to_increase = _mm256_add_ps(before_increment, floats_to_add);
+        
+        to_increase += output_stride;
+        in_as_u16 += 8;
+        item_count -= 8;
     }
     return 0;
 }
