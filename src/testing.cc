@@ -147,7 +147,12 @@ int init_canary_page (
     void* data_ptr = (char*)canary_ptr - data_size;
     
     // Make it so that anyone who touches the guard page dies.
-    mprotect(guard_page, 4096, PROT_NONE);
+    if (mprotect(guard_page, 4096, PROT_NONE) != 0) {
+        free(canary_data);
+        munmap(page, mapped_size);
+        perror("init_canary_page mprotect");
+        return -1;
+    }
     
     if (canary_size != 0) {
         memcpy(canary_ptr, canary_data, canary_size);

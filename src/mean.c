@@ -19,13 +19,14 @@
 
 #include <assert.h>
 #include <errno.h>
-#include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
 #include <immintrin.h>
 #include <emmintrin.h>
 
 #include "convert.h"
+#include "sigmautil.h"
+
 
 int mediocre_mean_u16(
     uint16_t* out,
@@ -69,19 +70,6 @@ int mediocre_mean_u16(
     return 0;
 }
 
-/*  Return a mask representing whether each float arg[i] in arg  is  in  the
- *  range [lower[i], upper[i]] (inclusive). mask[i] is positive (high bit 0)
- *  if arg[i] was in-range, negative (high bit 1) if it was out of range.
- */
-static inline __m256 sigma_mask(__m256 arg, __m256 lower, __m256 upper) {
-    // 0 bit if arg[i] >= lower[i], 1 bit if arg[i] < lower[i].
-    __m256 const lower_mask = _mm256_sub_ps(arg, lower);
-    // 0 bit if arg[i] <= upper[i], 1 bit if arg[i] > upper[i].
-    __m256 const upper_mask = _mm256_sub_ps(upper, arg);
-    // If either bit is 1, it's out-of-range and we should return 1.
-    return _mm256_or_ps(lower_mask, upper_mask);
-}
-
 // TODO Document this mess. To start, what is in2D?
 static inline void clipped_mean_u16_chunk(
     __m256* out,
@@ -99,9 +87,35 @@ static inline void clipped_mean_u16_chunk(
     const __m256 one = _mm256_set1_ps(1.0f);
     
     for (size_t g = 0; g < group_count; ++g) {
-        __m256 const* group = in2D + g*vectors_per_group;
-        __m256 lower_clip = _mm256_setzero_ps();
-        __m256 upper_clip = _mm256_set1_ps(65536.0f);
+        // Prepare for the coming iterations of sigma clipping.
+        // The group pointer will be initialized to point to the sub-array
+        // of 8 lanes of vectors_per_group floats. We will calculate 8 means
+        // at once for the 8 lanes of floats.
+        // 
+        // bounds is the current clipping bounds, which will be updated
+        // per iteration. We start with the least restrictive bound 
+        // (for 16-bit unsigned numbers): zero to 65536.
+        // 
+        // clipped_mean is the mean of the numbers currently within the clipping
+        // bounds defined by bounds. This is also updated per iteration.
+        // 
+        // If the same number of numbers were used to calculate the clipped
+        // mean in one iteration as in the next iteration, then we know that
+        // all further iterations will also clip no more numbers and we can
+        // finish iteration early. We implement this by storing the count of
+        // numbers used per lane to calculate the mean in the previous     
+        // iteration using the lanes of the previous_count variable, and
+        // comparing this with the count used in the current iteration.
+        // Once there is no change in each lane (or we iterate until max_iter),
+        // finish iterating, write out each lane of the final clipped_mean 
+        // output, and move on to the next group of 8-lane vectors.
+        // 
+        // In truth, I wonder if the branch (mis)prediction costs are more
+        // than the time saved by finishing iteration early (probably not).
+        __m256 const* const group = in2D + g*vectors_per_group;
+        struct ClipBoundsM256 bounds = {
+            _mm256_setzero_ps(), _mm256_set1_ps(65536.0f)
+        };
         __m256 clipped_mean;
         __m256 previous_count = _mm256_set1_ps((float)vectors_per_group + 1.f);
         
@@ -120,7 +134,7 @@ static inline void clipped_mean_u16_chunk(
                 // clipping range and either the number itself or one
                 // to sum and count, respectively, if it was in range.
                 __m256 const vec = group[i];
-                __m256 const mask = sigma_mask(vec, lower_clip, upper_clip);
+                __m256 const mask = sigma_mask(vec, bounds);
                 
                 sum = _mm256_add_ps(sum, _mm256_blendv_ps(vec, zero, mask));
                 count = _mm256_add_ps(count, _mm256_blendv_ps(one, zero, mask));
@@ -139,75 +153,18 @@ static inline void clipped_mean_u16_chunk(
             }
             previous_count = count;
             
-            // To calculate the standard deviation, we need to first get the
-            // sum of the squared deviations. We will do this in double rather
-            // than single precision since we will be adding up a lot of
-            // large numbers, and we want to minimize rounding error.
-            // (Trust me, this was in single precision before I rewrote
-            // it using double precision; float wasn't good enough -_-).
-            __m256d lo_ss = _mm256_setzero_pd();
-            __m256d hi_ss = _mm256_setzero_pd();
-            __m256d const lo_count = _mm256_cvtps_pd(
-                _mm256_castps256_ps128(count)
+            // Now we know that we should continue iterating, calculate
+            // the new bounds to be used for next iteration's calculation
+            // of the mean.
+            bounds = sigma_clip_step(
+                group,                  // data
+                vectors_per_group,      // vector_count
+                bounds,                 // bounds
+                clipped_mean,           // mean
+                count,                  // clipped_count
+                sigma_lower,            // sigma_lower (double vector)
+                sigma_upper             // sigma_upper (double vector)
             );
-            __m256d const hi_count = _mm256_cvtps_pd(
-                _mm256_extractf128_ps(count, 1)
-            );
-            __m256d const lo_mean = _mm256_cvtps_pd(
-                _mm256_castps256_ps128(clipped_mean)
-            );
-            __m256d const hi_mean = _mm256_cvtps_pd(
-                _mm256_extractf128_ps(clipped_mean, 1)
-            );
-            for (size_t i = 0; i < vectors_per_group; ++i) {
-                // I think that recalculating the mask is faster than storing
-                // and reloading it from memory. Memory is slooooow.
-                __m256 const vec = group[i];
-                __m256 const mask = sigma_mask(vec, lower_clip, upper_clip);
-                
-                __m256 const diffs = _mm256_blendv_ps(
-                    _mm256_sub_ps(vec, clipped_mean), zero, mask
-                );
-                __m256d const lo_diffs = _mm256_cvtps_pd(
-                    _mm256_castps256_ps128(diffs)
-                );
-                __m256d const hi_diffs = _mm256_cvtps_pd(
-                    _mm256_extractf128_ps(diffs, 1)
-                );
-                __m256d lo_sq = _mm256_mul_pd(lo_diffs, lo_diffs);
-                __m256d hi_sq = _mm256_mul_pd(hi_diffs, hi_diffs);
-                
-                hi_ss = _mm256_add_pd(hi_ss, hi_sq);
-                lo_ss = _mm256_add_pd(lo_ss, lo_sq);
-            }
-            // Now we have the sum of the squared deviations and we can
-            // use it to get the standard deviation. Use this to calculate
-            // the lower and upper clip bounds for the next iteration.
-            // (Yes, I know about FMA, but not all processors do ;_; )
-            __m256d const lo_avg_ss = _mm256_div_pd(lo_ss, lo_count);
-            __m256d const hi_avg_ss = _mm256_div_pd(hi_ss, hi_count);
-            __m256d const lo_sd = _mm256_sqrt_pd(lo_avg_ss);
-            __m256d const hi_sd = _mm256_sqrt_pd(hi_avg_ss);
-            
-            __m256 const new_lower_clip = _mm256_setr_m128(
-                _mm256_cvtpd_ps(
-                    _mm256_sub_pd(lo_mean, _mm256_mul_pd(lo_sd, sigma_lower))
-                ),
-                _mm256_cvtpd_ps(
-                    _mm256_sub_pd(hi_mean, _mm256_mul_pd(hi_sd, sigma_lower))
-                )
-            );
-            __m256 const new_upper_clip = _mm256_setr_m128(
-                _mm256_cvtpd_ps(
-                    _mm256_add_pd(lo_mean, _mm256_mul_pd(lo_sd, sigma_upper))
-                ),
-                _mm256_cvtpd_ps(
-                    _mm256_add_pd(hi_mean, _mm256_mul_pd(hi_sd, sigma_upper))
-                )
-            );
-            
-            lower_clip = _mm256_max_ps(lower_clip, new_lower_clip);
-            upper_clip = _mm256_min_ps(upper_clip, new_upper_clip);
         }
         out[g] = clipped_mean;
     }

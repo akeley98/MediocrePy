@@ -1,8 +1,8 @@
-CC = clang -mavx -O2 -S -std=c11 -Wall -Wextra -I include
-CC4 = clang -mavx -O3 -S -std=c11 -Wall -Wextra -I include
-Cxx = clang -mavx -O2 -S -std=c++11 -Wall -Wextra -I include
+CC = clang -fPIC -mavx -O2 -S -std=c11 -Wall -Wextra -I include
+CC4 = clang -fPIC -mavx -O3 -S -std=c11 -Wall -Wextra -I include
+Cxx = clang -fPIC -mavx -O2 -S -std=c++11 -Wall -Wextra -I include
 
-LinkLib = clang -g -lm -shared
+LinkLib = clang -g -fPIC -lm -shared
 LinkTest = clang++ -g
 
 # bin/ is a bit of a misnomer since I'm really compiling to assembly instead of
@@ -11,12 +11,15 @@ LinkTest = clang++ -g
 bin/convert.s: src/convert.c include/convert.h
 	$(CC4) src/convert.c -o bin/convert.s
 
-bin/mean.s: src/mean.c include/mean.h include/convert.h
+bin/mean.s: src/mean.c include/mean.h include/convert.h include/sigmautil.h
 	$(CC4) src/mean.c -o bin/mean.s
 
 bin/testing.s: src/testing.cc
 	$(Cxx) src/testing.cc -o bin/testing.s
 
+bin/mediocre.so: bin/convert.s bin/mean.s
+	$(LinkLib) bin/convert.s bin/mean.s
+	
 tests/bin/convert_test.s: tests/convert_test.c include/convert.h include/testing.h
 	$(CC) tests/convert_test.c -o tests/bin/convert_test.s
 
