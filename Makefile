@@ -13,6 +13,9 @@ bin/convert.s: src/convert.c include/convert.h
 
 bin/mean.s: src/mean.c include/mean.h include/convert.h include/sigmautil.h
 	$(CC4) src/mean.c -o bin/mean.s
+	
+bin/median.s: src/median.c include/median.h include/convert.h include/sigmautil.h
+	$(CC4) src/median.c -o bin/median.s
 
 bin/testing.s: src/testing.cc
 	$(Cxx) src/testing.cc -o bin/testing.s

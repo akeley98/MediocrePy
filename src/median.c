@@ -18,13 +18,320 @@
 #include "median.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <immintrin.h>
 #include <emmintrin.h>
 
+#include "convert.h"
 #include "sigmautil.h"
+
+/*  Sort the numbers within the 8 lanes of the to_sort array[0...count -  1]
+ *  of vectors passed in. If it makes more sense, think of it like calling a
+ *  scalar array sort function 8 times with a stride of 32 bytes instead  of
+ *  4  bytes.  The  scratch  array  is  used  as  temporary  storage for the
+ *  mergesort  algorithm.  The  caller  is  responsible  for  ensuring  both
+ *  pointers  point  to a suitably (32 byte) aligned array with enough space
+ *  for count __m256 vectors each.
+ */
+void mergesort_m256(__m256* to_sort, size_t count, __m256* scratch);
+
+/*  Function for checking merge precondition: all 8 lanes in  the  array  of
+ *  vector_count vectors must have their floats in ascending order.
+ */
+
+static int is_sorted_m256(__m256 const* in, size_t vector_count) {
+    __m256 bits = _mm256_setzero_ps();
+    __m256 previous = in[0];
+    for (size_t i = 1; i < vector_count; ++i) {
+        __m256 current = in[i];
+        bits = _mm256_or_ps(bits, _mm256_cmp_ps(current, previous, _CMP_LT_OQ));
+        previous = current;
+    }
+    return _mm256_movemask_ps(bits) == 0;
+}
+
+/*  Calculate the sigma clipped median of groups of floating  point  numbers
+ *  with lower and upper sigma bounds passed as specified below.
+ *  
+ *  Each group of numbers is passed to the function  as  a  lane  of  floats
+ *  within an array[0 ... group_size - 1] of __m256 vectors. Since there are
+ *  8 lanes within an __m256 vector, 8 groups are passed within  one  array.
+ *  These  arrays  are  passed as subarrays[0 ... group_size - 1] within the
+ *  in2D array. The in2D array will be used as temporary storage within this
+ *  function,  and  will  have  unspecified  value  upon return. The clipped
+ *  median of each lane of floats is written to the out array.  Interpreting
+ *  the pointers as pointers to float instead of to__m256,
+ *      out[8x + y]
+ *  corresponds to the clipped median of every 8th float in the range
+ *      in2D[8*x*group_size + y ... 8*(x+1)*group_size + y - 8]
+ *  (see example below)
+ *  
+ *    ** out
+ *  array [0 ... subarray_count - 1] of __m256
+ *    ** in2D
+ *  array [0 ... subarray_count * group_size - 1] of __m256
+ *  in2D's CONTENTS WILL HAVE UNSPECIFIED VALUE AFTER THE FUNCTION RETURNS.
+ *    ** group_size
+ *  count of the number of floats that are clipped into a single output
+ *    ** subarray_count
+ *  number of groups, divided by 8.
+ *    ** sigma_lower
+ *  lower bound (in standard deviations) for the sigma clipping passed as  a
+ *  vector of 4 identical positive doubles.
+ *    ** sigma_upper
+ *  upper bound (in standard deviations) for the sigma clipping passed as  a
+ *  vector of 4 identical positive doubles.
+ *    ** max_iter
+ *  maximum number of iterations of sigma clipping to be performed.
+ *    ** scratch
+ *  array [0 ... group_size - 1] of __m256 (for temporary storage).
+ *  
+ *  Example memory layout for group_size = 4, subarray_count = 3 (3 * 8 = 24
+ *  groups of 4 floats total). Each of the 4 numbers stored in in2D labelled
+ *  with the same character has their clipped median output  to  the  number
+ *  with the same label in out.
+ *  
+ *      out+0:  0 1 2 3 4 5 6 7  8 9 A B C D E F
+ *      +64:    G H I J K L M N
+ *  
+ *      in2D+0: 0 1 2 3 4 5 6 7  0 1 2 3 4 5 6 7
+ *      +64:    0 1 2 3 4 5 6 7  0 1 2 3 4 5 6 7
+ *      +128:   8 9 A B C D E F  8 9 A B C D E F
+ *      +192:   8 9 A B C D E F  8 9 A B C D E F
+ *      +256:   G H I J K L M N  G H I J K L M N
+ *      +320:   G H I J K L M N  G H I J K L M N 
+ */
+static inline void clipped_median_chunk_m256(
+    __m256* out,
+    __m256* in2D,
+    size_t group_size,
+    size_t subarray_count,
+    __m256d sigma_lower,
+    __m256d sigma_upper,
+    size_t max_iter,
+    __m256* scratch
+) {
+    assert(subarray_count >= 1);
+    assert(group_size >= 1);
+    assert(group_size <= 0x7FFFFF);
+    
+    const __m256 zero = _mm256_setzero_ps();
+    const __m256 half = _mm256_set1_ps(0.5f);
+    const __m256 half_group_size_vector = _mm256_set1_ps(group_size / 2.0f);
+    
+    for (size_t g = 0; g < subarray_count; ++g) {
+        __m256* subarray = in2D + g * group_size;
+        
+        mergesort_m256(subarray, group_size, scratch);
+        assert(is_sorted_m256(subarray, group_size));
+        
+        __m256 clipped_median = _mm256_add_ps(
+            _mm256_mul_ps(half, subarray[group_size/2]),
+            _mm256_mul_ps(half, subarray[(group_size+1)/2])
+        );
+        __m256 previous_count = _mm256_set1_ps(-1.0f);
+        __m256 count = _mm256_div_ps(half_group_size_vector, half);
+        
+        struct ClipBoundsM256 bounds = {
+            _mm256_set1_ps(-1.f/0.f), _mm256_set1_ps(1.f/0.f)
+        };
+        
+        for (size_t iter = 0; iter != max_iter; ++iter) {
+            bounds = sigma_clip_step(
+                subarray,               // data
+                group_size,             // vector_count
+                bounds,                 // bounds
+                clipped_median,         // center
+                count,                  // clipped_count
+                sigma_lower,            // sigma_lower
+                sigma_upper             // sigma_upper
+            );
+            
+            // Recalculate median.
+            __m256 median_index = half_group_size_vector;
+            count = half_group_size_vector;
+            
+            for (size_t i = 0; i < group_size; ++i) {
+                const __m256 vec = subarray[i];
+                
+                const __m256 half_if_below = _mm256_blendv_ps(
+                    zero, half,
+                    _mm256_cmp_ps(vec, bounds.lower, _CMP_LT_OQ)
+                );
+                const __m256 half_if_above = _mm256_blendv_ps(
+                    zero, half,
+                    _mm256_cmp_ps(vec, bounds.upper, _CMP_GT_OQ)
+                );
+                median_index = _mm256_add_ps(median_index, half_if_below);
+                median_index = _mm256_sub_ps(median_index, half_if_above);
+                
+                count = _mm256_sub_ps(count, half_if_below);
+                count = _mm256_sub_ps(count, half_if_above);
+            }
+            count = _mm256_div_ps(count, half);
+            
+            previous_count = _mm256_cmp_ps(previous_count, count, _CMP_NEQ_OQ);
+            if (_mm256_movemask_ps(previous_count) == 0) {
+                break;
+            }
+            previous_count = count;
+            
+            const __m256i low_index = _mm256_cvtps_epi32(
+                _mm256_floor_ps(median_index)
+            );
+            
+            const __m256i high_index = _mm256_cvtps_epi32(
+                _mm256_ceil_ps(median_index)
+            );
+            
+            __m256i low_data = _mm256_undefined_ps();
+            
+            int32_t i0 = _mm256_extract_epi32(low_index, 0);
+            int32_t i1 = _mm256_extract_epi32(low_index, 1);
+            int32_t i2 = _mm256_extract_epi32(low_index, 2);
+            int32_t i3 = _mm256_extract_epi32(low_index, 3);
+            int32_t i4 = _mm256_extract_epi32(low_index, 4);
+            int32_t i5 = _mm256_extract_epi32(low_index, 5);
+            int32_t i6 = _mm256_extract_epi32(low_index, 6);
+            int32_t i7 = _mm256_extract_epi32(low_index, 7);
+            
+            low_data = _mm256_blend_ps(low_data, subarray[i0], 1 << 0);
+            low_data = _mm256_blend_ps(low_data, subarray[i1], 1 << 1);
+            low_data = _mm256_blend_ps(low_data, subarray[i2], 1 << 2);
+            low_data = _mm256_blend_ps(low_data, subarray[i3], 1 << 3);
+            low_data = _mm256_blend_ps(low_data, subarray[i4], 1 << 4);
+            low_data = _mm256_blend_ps(low_data, subarray[i5], 1 << 5);
+            low_data = _mm256_blend_ps(low_data, subarray[i6], 1 << 6);
+            low_data = _mm256_blend_ps(low_data, subarray[i7], 1 << 7);
+            
+            i0 = _mm256_extract_epi32(high_index, 0);
+            i1 = _mm256_extract_epi32(high_index, 1);
+            i2 = _mm256_extract_epi32(high_index, 2);
+            i3 = _mm256_extract_epi32(high_index, 3);
+            i4 = _mm256_extract_epi32(high_index, 4);
+            i5 = _mm256_extract_epi32(high_index, 5);
+            i6 = _mm256_extract_epi32(high_index, 6);
+            i7 = _mm256_extract_epi32(high_index, 7);
+            
+            clipped_median = _mm256_blend_ps(clipped_median, subarray[i0], 1);
+            clipped_median = _mm256_blend_ps(clipped_median, subarray[i1], 2);
+            clipped_median = _mm256_blend_ps(clipped_median, subarray[i2], 4);
+            clipped_median = _mm256_blend_ps(clipped_median, subarray[i3], 8);
+            clipped_median = _mm256_blend_ps(clipped_median, subarray[i4], 16);
+            clipped_median = _mm256_blend_ps(clipped_median, subarray[i5], 32);
+            clipped_median = _mm256_blend_ps(clipped_median, subarray[i6], 64);
+            clipped_median = _mm256_blend_ps(clipped_median, subarray[i7], 128);
+            
+            clipped_median = _mm256_add_ps(clipped_median, low_data);
+            clipped_median = _mm256_mul_ps(half, clipped_median);
+        }
+        out[g] = clipped_median;
+    }
+    
+    // Overwrite the input array in debug mode to emphasize the point
+    // that they are consumed as temporary storage by the function.
+    assert(memset(in2D, 42, sizeof(__m256) * group_size * subarray_count));
+}
+
+int mediocre_clipped_median_u16(
+    uint16_t* out,
+    uint16_t const* const* data,
+    size_t array_count,
+    size_t bin_count,
+    double sigma_lower,
+    double sigma_upper, 
+    size_t max_iter
+) {
+    if (
+        array_count == 0 || bin_count == 0 ||
+        sigma_lower < 1. || sigma_upper < 1.
+    ) {
+        errno = EINVAL;
+        return -1;
+    }
+    int err = 0;
+    const __m256d sigma_lower_vec = _mm256_set1_pd(sigma_lower);
+    const __m256d sigma_upper_vec = _mm256_set1_pd(sigma_upper);
+    const size_t chunk_vector_count = 2048;
+    const size_t chunk_item_count = chunk_vector_count * 8;
+    
+    const size_t chunk_count = bin_count / chunk_item_count;
+    
+    __m256* allocated = (__m256*)aligned_alloc(
+        sizeof(__m256), (2 + array_count) * chunk_vector_count * sizeof(__m256)
+    );
+    
+    if (allocated == NULL) {
+        assert(errno == ENOMEM);
+        return -1;
+    }
+    
+    __m256* out_chunk = allocated;
+    __m256* scratch = allocated + chunk_vector_count;
+    __m256* in2D = allocated + 2 * chunk_vector_count;
+    
+    for (size_t c = 0; c < chunk_count; ++c) {
+        for (size_t a = 0; a < array_count; ++a) {
+            load_m256_from_u16_stride(
+                in2D + a,
+                data[a] + chunk_item_count*c,
+                chunk_item_count,               // item_count
+                array_count                     // stride
+            );
+            clipped_median_chunk_m256(
+                out_chunk, in2D,
+                array_count, chunk_vector_count,
+                sigma_lower_vec, sigma_upper_vec,
+                max_iter, scratch
+            );
+        }
+        uint16_t* final_output = out + chunk_item_count*c;
+        err |= load_u16_from_m256(final_output, out_chunk, chunk_item_count);
+    }
+    size_t remainder = bin_count % chunk_item_count;
+    size_t remainder_vector_count = (remainder + 7) / 8;
+    if (remainder != 0) {
+        for (size_t a = 0; a < array_count; ++a) {
+            load_m256_from_u16_stride(
+                in2D + a,
+                data[a] + chunk_item_count*chunk_count,
+                remainder,      // item_count
+                array_count     // stride
+            );
+        }
+        clipped_median_chunk_m256(
+            out_chunk, in2D,
+            array_count, remainder_vector_count,
+            sigma_lower_vec, sigma_upper_vec,
+            max_iter, scratch
+        );
+        uint16_t* final_output = out + chunk_item_count*chunk_count;
+        err |= load_u16_from_m256(final_output, out_chunk, remainder);
+    }
+    free(allocated);
+    
+    return err;
+}
+
+/**************************************************************************
+ *                                                                        *
+ *                           THE END (really)                             *
+ *                                                                        *
+ **************************************************************************/
+
+
+
+
+
+
+
+
+
+
+// Have you ever read "The Ones Who Walk Away from Omelas"?
 
 #define BUBBLE_UPWARDS_2(a, b, temporary) \
     temporary = a; \
@@ -82,11 +389,6 @@
 #define BUBBLE_UPWARDS_15(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, t) \
     BUBBLE_UPWARDS_14(A, B, C, D, E, F, G, H, I, J, K, L, M, N, t); \
     BUBBLE_UPWARDS_2(N, O, t)
-
-#define BUBBLE_UPWARDS_16(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, t) \
-    BUBBLE_UPWARDS_15(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, t); \
-    BUBBLE_UPWARDS_2(O, P, t)
-
 
 //  Sort 8 lanes of count vectors using the most advanced sorting
 //  algorithm known to science: THE BUBBLE SORT!
@@ -183,22 +485,11 @@ static void bubble_sort_m256(__m256* array, size_t count) {
         case 2:
             BUBBLE_UPWARDS_2(a, b, tmp);
             array[1] = b;
+        case 1:
             array[0] = a;
+        case 0:
+            break;
     }
-}
-
-/*  Function for checking merge precondition: all 8 lanes in  the  array  of
- *  vector_count vectors must have their floats in ascending order.
- */
-static int is_sorted_m256(__m256 const* in, size_t vector_count) {
-    __m256 bits = _mm256_setzero_ps();
-    __m256 previous = in[0];
-    for (size_t i = 1; i < vector_count; ++i) {
-        __m256 current = in[i];
-        bits = _mm256_or_ps(bits, _mm256_cmp_ps(current, previous, _CMP_LT_OQ));
-        previous = current;
-    }
-    return _mm256_movemask_ps(bits) == 0;
 }
 
 /*  Merge the 8 lanes  of  floats  in  the  input  array,  which  should  be
@@ -242,7 +533,7 @@ static void merge_m256(
     __m256 inc_old_index = one;
     __m256 new_index = end_l;
     __m256 inc_new_index = _mm256_add_ps(one, end_l);
-    __m256 input_exhausted_mask = _mm256_setzero_ps();
+    __m256 empty_partition_mask = _mm256_setzero_ps();
     __m256 mask = _mm256_cmp_ps(old_data, new_data, _CMP_GE_OQ);
     
     out[0] = _mm256_min_ps(old_data, new_data);
@@ -255,7 +546,7 @@ static void merge_m256(
             _mm256_cmp_ps(end_r, new_index, _CMP_EQ_OQ),
             _mm256_cmp_ps(end_l, new_index, _CMP_EQ_OQ)
         );
-        input_exhausted_mask = _mm256_or_ps(input_exhausted_mask, at_end);
+        empty_partition_mask = _mm256_or_ps(empty_partition_mask, at_end);
         new_index = _mm256_blendv_ps(new_index, old_index, at_end);
         
         inc_old_index = _mm256_add_ps(one, old_index);
@@ -282,7 +573,7 @@ static void merge_m256(
         new_data = _mm256_blend_ps(new_data, in[i7], 1 << 7);
         
         mask = _mm256_cmp_ps(old_data, new_data, _CMP_GT_OQ);
-        mask = _mm256_or_ps(mask, input_exhausted_mask);
+        mask = _mm256_or_ps(mask, empty_partition_mask);
         
         // It really bothers me how blendv reads in the exact opposite order
         // as a ternary statement. condition ? if_true : if_false becomes
@@ -294,8 +585,26 @@ static void merge_m256(
     }
 }
 
-static void mergesort_m256(__m256* to_sort, __m256* scratch, size_t count) {
-    size_t part_size = 20;
+/*  Sort the numbers within the 8 lanes of the to_sort array[0...count -  1]
+ *  of vectors passed in. If it makes more sense, think of it like calling a
+ *  scalar array sort function 8 times with a stride of 32 bytes instead  of
+ *  4  bytes.  The  scratch  array  is  used  as  temporary  storage for the
+ *  mergesort  algorithm.  The  caller  is  responsible  for  ensuring  both
+ *  pointers  point  to a suitably (32 byte) aligned array with enough space
+ *  for count __m256 vectors each.
+ *       -> This comment is duplicated in the forward declaration. <-
+ */
+void mergesort_m256(__m256* to_sort, size_t count, __m256* scratch) {
+    // The first step is to bubble sort short (32) groups of vectors.    
+    // After that, we will merge those short runs of sorted vectors
+    // into larger runs until the run length equals the array length.
+    // Bubble sort runs faster than mergesort for various reasons for short
+    // inputs (chiefly due to memory vs register usage. My insane bubble
+    // sort function is ugly and hidden at the bottom of this file for a
+    // reason), so we use it as the first step in sorting. My quick-and-
+    // dirty experiments on a laptop seemed to show that 32 or 64 was the
+    // sweet spot for the initial bubble sort. 16 was a bit slower.
+    size_t part_size = 32;
     size_t remainder = count % part_size;
     
     bubble_sort_m256(to_sort, remainder);
@@ -325,149 +634,5 @@ static void mergesort_m256(__m256* to_sort, __m256* scratch, size_t count) {
     if (source != to_sort) {
         memcpy(to_sort, source, count * sizeof(__m256));
     }
-}
-
-#include "testing.h"
-
-float arr[800] = {
-  26, 1079, 2023, 3081, 4020, 5081, 6083, 7058,
-  88, 1059, 2073, 3015, 4019, 5054, 6001, 7011,
-  65, 1060, 2086, 3043, 4065, 5058, 6078, 7049,
-  83, 1028, 2093, 3084, 4084, 5015, 6067, 7003,
-  29, 1021, 2056, 3062, 4003, 5011, 6041, 7080,
-  23, 1076, 2076, 3010, 4016, 5012, 6023, 7095,
-  12, 1044, 2036, 3095, 4043, 5022, 6044, 7097,
-  97, 1089, 2043, 3028, 4042, 5062, 6075, 7065,
-  35, 1047, 2050, 3020, 4048, 5010, 6049, 7030,
-  25, 1078, 2012, 3075, 4039, 5025, 6074, 7025,
-  50, 1097, 2089, 3025, 4030, 5027, 6059, 7052,
-   8, 1065, 2046, 3035, 4008, 5013, 6064, 7092,
-  13, 1098, 2017, 3082, 4032, 5040, 6084, 7081,
-  93, 1026, 2003, 3056, 4013, 5003, 6061, 7094,
-  59, 1094, 2061, 3001, 4023, 5069, 6048, 7060,
-  19, 1016, 2090, 3030, 4089, 5061, 6093, 7085,
-   2, 1006, 2079, 3054, 4037, 5017, 6014, 7056,
-  38, 1053, 2014, 3033, 4064, 5039, 6060, 7074,
-  48, 1032, 2096, 3090, 4040, 5047, 6033, 7029,
-  95, 1091, 2005, 3026, 4031, 5045, 6026, 7031,
-  11, 1036, 2030, 3049, 4010, 5042, 6046, 7069,
-  21, 1058, 2034, 3052, 4061, 5088, 6065, 7076,
-  71, 1024, 2002, 3037, 4038, 5021, 6076, 7083,
-   5, 1011, 2022, 3002, 4022, 5053, 6016, 7017,
-  44, 1061, 2021, 3086, 4051, 5046, 6056, 7040,
-  32, 1096, 2064, 3011, 4068, 5090, 6068, 7079,
-  82, 1069, 2059, 3005, 4060, 5086, 6039, 7087,
-  61, 1049, 2087, 3078, 4046, 5057, 6007, 7071,
-   6, 1074, 2001, 3072, 4002, 5074, 6047, 7024,
-  22, 1033, 2053, 3079, 4017, 5092, 6045, 7047,
-  85, 1014, 2075, 3009, 4045, 5007, 6082, 7026,
-  47, 1046, 2060, 3057, 4005, 5043, 6058, 7066,
-  56, 1042, 2092, 3088, 4083, 5080, 6080, 7096,
-  75, 1054, 2040, 3040, 4027, 5083, 6086, 7051,
-  76, 1031, 2026, 3029, 4056, 5044, 6057, 7077,
-  34, 1064, 2098, 3099, 4095, 5067, 6070, 7067,
-  45, 1027, 2037, 3014, 4018, 5089, 6003, 7062,
-  28, 1002, 2055, 3064, 4093, 5078, 6013, 7048,
-  80, 1041, 2095, 3094, 4096, 5096, 6015, 7023,
-  58, 1015, 2035, 3023, 4015, 5087, 6051, 7015,
-  46, 1013, 2031, 3093, 4088, 5084, 6100, 7070,
-  20, 1018, 2100, 3085, 4041, 5031, 6025, 7018,
-  42, 1063, 2067, 3089, 4098, 5065, 6034, 7061,
-  30, 1052, 2065, 3055, 4034, 5038, 6005, 7001,
-  57, 1090, 2004, 3063, 4025, 5030, 6052, 7008,
-  18, 1017, 2020, 3039, 4085, 5048, 6092, 7045,
-  79, 1048, 2054, 3045, 4072, 5073, 6008, 7053,
-  17, 1071, 2091, 3065, 4087, 5034, 6020, 7068,
-  99, 1007, 2080, 3080, 4044, 5041, 6089, 7059,
-  55, 1043, 2047, 3092, 4073, 5085, 6024, 7098,
-  92, 1009, 2066, 3083, 4077, 5052, 6077, 7028,
-  89, 1025, 2013, 3018, 4091, 5063, 6009, 7039,
-  98, 1080, 2018, 3048, 4086, 5006, 6018, 7089,
-   1, 1070, 2072, 3044, 4100, 5071, 6062, 7082,
-  49, 1045, 2006, 3091, 4009, 5099, 6097, 7036,
-  36, 1066, 2042, 3074, 4028, 5019, 6072, 7020,
-   9, 1083, 2025, 3069, 4052, 5095, 6081, 7073,
-  81, 1073, 2088, 3087, 4062, 5035, 6040, 7090,
-  31, 1068, 2074, 3058, 4006, 5076, 6091, 7055,
-  67, 1050, 2032, 3053, 4079, 5028, 6099, 7010,
-  77, 1086, 2057, 3019, 4059, 5037, 6032, 7038,
-  66, 1093, 2099, 3012, 4033, 5036, 6042, 7086,
-  16, 1077, 2038, 3050, 4014, 5070, 6030, 7043,
-  24, 1092, 2094, 3066, 4071, 5075, 6055, 7063,
-  52, 1085, 2070, 3017, 4099, 5004, 6043, 7019,
-  70, 1023, 2009, 3046, 4063, 5060, 6054, 7004,
-   4, 1040, 2010, 3070, 4053, 5033, 6088, 7035,
-  96, 1095, 2071, 3013, 4055, 5094, 6028, 7044,
-  64, 1067, 2024, 3027, 4001, 5002, 6035, 7075,
-  90, 1072, 2083, 3059, 4036, 5077, 6071, 7012,
-  33, 1100, 2027, 3060, 4058, 5005, 6027, 7006,
-  27, 1075, 2085, 3071, 4066, 5029, 6029, 7078,
-  14, 1099, 2033, 3006, 4075, 5016, 6004, 7037,
-  94, 1010, 2016, 3022, 4029, 5009, 6063, 7013,
-  40, 1003, 2029, 3021, 4080, 5072, 6066, 7014,
-  51, 1022, 2011, 3051, 4090, 5097, 6006, 7034,
-  43, 1008, 2049, 3003, 4007, 5066, 6095, 7022,
-  62, 1087, 2051, 3047, 4094, 5056, 6069, 7072,
-  10, 1029, 2028, 3061, 4074, 5051, 6096, 7027,
-  74, 1030, 2052, 3098, 4012, 5079, 6094, 7032,
-  86, 1001, 2084, 3004, 4026, 5100, 6002, 7084,
-  84, 1019, 2062, 3038, 4069, 5026, 6090, 7041,
-   3, 1062, 2081, 3041, 4024, 5014, 6031, 7016,
- 100, 1057, 2069, 3100, 4021, 5068, 6079, 7100,
-  41, 1081, 2068, 3067, 4050, 5032, 6098, 7042,
-  73, 1004, 2039, 3032, 4049, 5091, 6022, 7050,
-  53, 1051, 2063, 3096, 4057, 5064, 6085, 7009,
-  68, 1055, 2041, 3031, 4078, 5098, 6053, 7057,
-  60, 1056, 2097, 3008, 4047, 5024, 6038, 7005,
-  87, 1038, 2008, 3073, 4082, 5023, 6010, 7007,
-  63, 1035, 2007, 3068, 4097, 5020, 6036, 7002,
-  91, 1088, 2044, 3097, 4081, 5049, 6012, 7021,
-  78, 1082, 2045, 3076, 4035, 5001, 6019, 7091,
-  15, 1012, 2058, 3007, 4054, 5008, 6087, 7093,
-  39, 1084, 2019, 3034, 4076, 5093, 6037, 7088,
-  72, 1039, 2082, 3016, 4092, 5059, 6017, 7064,
-  69, 1037, 2077, 3036, 4011, 5055, 6021, 7033,
-  54, 1034, 2015, 3024, 4070, 5018, 6050, 7099,
-   7, 1020, 2078, 3042, 4067, 5050, 6073, 7046,
-  37, 1005, 2048, 3077, 4004, 5082, 6011, 7054
-};
-
-#define X (1 << 20)
-
-int main() {
-    struct CanaryPage a_page, b_page;
-    int err = init_canary_page(&a_page, sizeof(__m256) * X, 0);
-    err    |= init_canary_page(&b_page, sizeof(__m256) * X, 0);
-    
-    if (err) {
-        perror("Uh oh");
-        exit(1);
-    }
-    
-    __m256* m256_array = a_page.ptr;
-    __m256* tmp = b_page.ptr;
-    
-    memset(tmp, 42, sizeof(__m256) * X);
-    
-    unsigned seed = 100;
-    
-    for (size_t i = 0; i < X * 8; ++i) {
-        ((float*)m256_array)[i] = (float)rand_r(&seed);
-    }
-    
-    struct timeb timer_start;
-    ftime(&timer_start);
-    mergesort_m256(m256_array, tmp, X);
-    printf("%li\n", ms_elapsed(timer_start));
-    /*
-    for (size_t i = 0; i < X; ++i) {
-        float* f = (float*)&m256_array[i];
-        for (int i = 0; i < 8; ++i) {
-            printf("%9.1f ", f[i]);
-        }
-        printf("\n");
-    } */
-    
-    return 0;
 }
 

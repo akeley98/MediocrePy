@@ -37,10 +37,10 @@ static void print_timer_elapsed(struct timeb before, size_t item_count) {
 static const size_t max_offset = 15;           // Array can be offset to test
 static const size_t min_array_count = 1;       // for alignment bugs.
 static const size_t max_array_count = 20;
-static const size_t min_bin_count = 12000000;
-static const size_t max_bin_count = 13000000;
+static const size_t min_bin_count = 8000000;
+static const size_t max_bin_count = 9000000;
 static const uint32_t min_max_iter = 0;
-static const uint32_t max_max_iter = 5;
+static const uint32_t max_max_iter = 6;
 
 static uint16_t input_data[(max_array_count * max_bin_count) + max_offset + 1];
 

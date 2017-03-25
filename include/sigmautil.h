@@ -46,28 +46,29 @@ static inline __m256 sigma_mask(__m256 arg, struct ClipBoundsM256 bounds) {
  *  used  for  the  next  round  of  sigma  clipping.  This  is   calculated
  *  independently for each of the eight lanes of the vectors in the data and
  *  the vectors in the clipping bounds. Each lane of vector_count floats  in
- *  the data vector array represent a group of numbers to be sigma clipped.
+ *  the  data vector array represent a group of numbers to be sigma clipped,
+ *  and each lane of the vectors in the result represent  the  new  clipping
+ *  bounds of the corresponding group of numbers in the input.
  *  
  *      ** data
- *  array of 8 groups of vector_count floats  to  be  clipped  (1  lane  per
- *  group)
+ *    array of 8 groups of vector_count floats to be clipped (1 lane per group)
  *      ** vector_count
- *  size of the groups to be clipped, including those out of the bounds
+ *    size of the groups to be clipped, including those out of the bounds
  *      ** bounds
  *  clipping bounds used in the  previous  iteration.  Only  numbers  within
  *  these  bounds  (inclusive)  are  considered  in calculating the standard
  *  deviation and new clipping bounds.
  *      ** center
- *  center used for calculating the new bounds
+ *    center used for calculating the new bounds
  *      ** clipped_count
  *  count of numbers in each lane that are within the range defined  by  the
  *  bounds parameter. Although this function could internally determine this
  *  vector, the caller is responsible for calculating this vector  to  speed
  *  up the function.
  *      ** sigma_lower
- *  vector of 4 identical positive doubles
+ *    vector of 4 identical positive doubles
  *      ** sigma_upper
- *  vector of 4 identical positive doubles
+ *    vector of 4 identical positive doubles
  *  
  *  The new clipping range is defined as [center - sigma_lower * s, center +
  *  sigma_upper  *  s],  where  sd  is  calculated as the standard deviation
