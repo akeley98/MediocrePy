@@ -91,6 +91,11 @@ void delete_random(Random* generator) noexcept {
     delete generator;
 }
 
+// Sort floats in an array of the specified size.
+void sort_floats(float* array, size_t size) noexcept {
+    std::sort(array, array + size);
+}
+
 /*  Initialize a canary page with space for data_size bytes of  data  and  a
  *  canary  of  canary_size bytes. The canary is optional and is useful only
  *  for substituting segfaults for softer errors. If the canary is set to  0

@@ -1,19 +1,3 @@
-/*  An aggresively average SIMD python module
- *  Copyright (C) 2017 David Akeley
- *  
- *  This program is free software: you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation, either version 3 of the License, or
- *  (at your option) any later version.
- *  
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- *  GNU General Public License for more details.
- *  
- *  You should have received a copy of the GNU General Public License
- *  along with this program. If not, see <http://www.gnu.org/licenses/>.
- */
 
 #include <assert.h>
 #include <math.h>
@@ -22,19 +6,19 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "mean.h"
+#include "median.h"
 #include "testing.h"
 
 static struct Random* generator;
 static struct timeb timer_begin;
 
 static const size_t max_offset = 15;           // Array can be offset to test
-static const size_t min_array_count = 200;     // for alignment bugs.
-static const size_t max_array_count = 200;
-static const size_t min_bin_count = 200000;
-static const size_t max_bin_count = 200000;
-static const uint32_t min_max_iter = 10;
-static const uint32_t max_max_iter = 10;
+static const size_t min_array_count =   1;     // for alignment bugs.
+static const size_t max_array_count = 400;
+static const size_t min_bin_count = 50000;
+static const size_t max_bin_count = 75000;
+static const uint32_t min_max_iter = 0;
+static const uint32_t max_max_iter = 15;
 
 static uint16_t input_data[(max_array_count * max_bin_count) + max_offset + 1];
 
@@ -75,7 +59,7 @@ static void random_fill(uint16_t* out, size_t bin_count, uint32_t base) {
     }
 }
 
-static void test_mean(
+static void test_median(
     size_t array_count,
     size_t bin_count,
     size_t offset0,
@@ -85,8 +69,9 @@ static void test_mean(
     size_t max_iter
 ) {
     printf("Seed = %llu\n", (unsigned long long)get_seed(generator));
-    printf("\tAveraging %zi arrays of %zi integers.\n", array_count, bin_count);
-    printf("\tinput offset %zi output offset %zi.\n", offset0, offset1);    
+    printf("\tMedian of %zi arrays of %zi integers.\n", array_count, bin_count);
+    printf("\tinput offset %zi output offset %zi.\n", offset0, offset1);
+    printf("sigma[-%f, %f] max_iter %zi\n", sigma_lower, sigma_upper, max_iter);
     
     assert(min_array_count <= array_count && array_count <= max_array_count);
     assert(min_bin_count <= bin_count && bin_count <= max_bin_count);
@@ -127,92 +112,76 @@ static void test_mean(
         random_fill(input_pointers[i], bin_count, base);
     }
     
-    // First test the normal mean function.
+    // Test the clipped median function.
     ftime(&timer_begin);
-    int status = mediocre_mean_mu16(
-        output_pointer, input_pointers, array_count, bin_count);
-    printf("\33[36m\33[1mmean:         ");
+    int status = mediocre_clipped_median_mu16(
+        output_pointer, input_pointers, array_count, bin_count,
+        sigma_lower, sigma_upper, max_iter
+    );
+    printf("\33[32m\33[1mmedian:       ");
     print_timer_elapsed(timer_begin, array_count * bin_count);
     printf("\33[0m\n");
     
     if (status != 0) {
-        perror("mediocre_mean_u16 failed");
+        perror("mediocre_clipped_median_u16 failed");
         exit(1);
     }
     
-    for (size_t i = 0; i < bin_count; ++i) {
-        float total = 0.0f;
+    static float sorted[max_array_count];
+    
+    for (size_t b = 0; b < bin_count; ++b) {
         for (size_t a = 0; a < array_count; ++a) {
-            total += (float)input_pointers[a][i];
+            sorted[a] = (float)input_pointers[a][b];
         }
-        uint16_t avg = (uint16_t)nearbyintf(total / (float)array_count);
-        if (avg != output_pointer[i]) {
-            printf("[%zi] %u != %u\n", i, avg, output_pointer[i]);
-            exit(1);
-        }
-    }
-    
-    if(check_canary_page(output_page) < 0) {
-        printf("Output buffer overrun.\n");
-        exit(1);
-    }
-    memset(output_pointer, 42, bin_count * sizeof(uint16_t));
-    
-    // Now test the clipped mean function.
-    printf("sigma[-%f, %f] max_iter %zi\n", sigma_lower, sigma_upper, max_iter);
-    ftime(&timer_begin);
-    status = mediocre_clipped_mean_mu16(
-        output_pointer, input_pointers, array_count, bin_count,
-        sigma_lower, sigma_upper, max_iter
-    );
-    printf("\33[36m\33[1mclipped mean: ");
-    print_timer_elapsed(timer_begin, array_count * bin_count);
-    printf("\33[0m\n");
-    
-    if (status < 0) {
-        perror("mediocre_clipped_mean_u16 failed");
-        exit(1);
-    }
-    
-    for (size_t i = 0; i < bin_count; ++i) {
-        float lower_bound = 0.0f, upper_bound = 65536.0f, clipped_mean;
-        for (size_t it = 0; it != max_iter + 1; ++it) {
-            float sum = 0.0f, count = 0.0f;
-            for (size_t a = 0; a < array_count; ++a) {
-                float n = (float)input_pointers[a][i];
-                if (n >= lower_bound && n <= upper_bound) {
-                    count += 1.0f;
-                    sum += n;
-                }
-            }
-            clipped_mean = sum / count;
+        sort_floats(sorted, array_count);
+        size_t current_count = array_count;
+        
+        float median = 0.5f * (
+            sorted[array_count / 2] + sorted[(array_count-1) / 2]
+        );
+        float lower_bound = -1.f/0.f, upper_bound = 1.f/0.f;
+        
+        for (size_t iter = 0; iter != max_iter; ++iter) {
             double ss = 0.0;
-            for (size_t a = 0; a < array_count; ++a) {
-                float n = (float)input_pointers[a][i];
+            for (size_t c = 0; c < current_count; ++c) {
+                float n = sorted[c];
                 if (n >= lower_bound && n <= upper_bound) {
-                    double dev = n - clipped_mean;
+                    double dev = n - median;
                     ss += dev * dev;
                 }
             }
-            double sd = sqrt(ss / count);
-            float new_lb = (float)(clipped_mean - sigma_lower*sd);
-            float new_ub = (float)(clipped_mean + sigma_upper*sd);
+            double sd = sqrt(ss / current_count);
+            float new_lb = (float)(median - sigma_lower*sd);
+            float new_ub = (float)(median + sigma_upper*sd);
             
             lower_bound = (new_lb < lower_bound) ? lower_bound : new_lb;
             upper_bound = (new_ub > upper_bound) ? upper_bound : new_ub;
+            
+            size_t new_count = 0;
+            for (size_t c = 0; c < current_count; ++c) {
+                float n = sorted[c];
+                if (n >= lower_bound && n <= upper_bound) {
+                    sorted[new_count++] = n;
+                }
+            }
+            current_count = new_count;
+            
+            median = 0.5f * (
+                sorted[current_count / 2] + sorted[(current_count-1) / 2]
+            );
         }
-        uint16_t result = (uint16_t)nearbyintf(clipped_mean);
-        if (result != output_pointer[i]) {
-            printf("[%zi] %u != %u\n[", i, result, output_pointer[i]);
+        uint16_t median_u16 = (uint16_t)nearbyintf(median);
+        if (median_u16 != output_pointer[b]) {
+            printf("[%zi] %u != %u\n[", b, median_u16, output_pointer[b]);
             for (size_t a = 0; a < array_count; ++a) {
-                printf(" %u", input_pointers[a][i]);
+                printf("%u,", input_pointers[a][b]);
             }
             printf(" ]\n");
             exit(1);
         }
     }
     
-    if(check_canary_page(output_page) < 0) {
+    if (check_canary_page(output_page) != 0) {
         printf("Output buffer overrun.\n");
         exit(1);
     }
@@ -224,12 +193,13 @@ static void test_mean(
 int main() {
     generator = new_random();
     
-    for (size_t i = 0; i < 24; ++i) {
+    for (size_t i = 0; i < 60; ++i) {
         size_t array_count = random_dist_u32(
-            generator, min_array_count, max_array_count);
+            generator, min_array_count, max_array_count
+        );
         size_t bin_count = random_dist_u32(
-            generator, min_bin_count, max_bin_count);
-        
+            generator, min_bin_count, max_bin_count
+        );
         size_t offset0 = random_dist_u32(generator, 0, max_offset);
         size_t offset1 = random_dist_u32(generator, 0, max_offset);
         double sigma_lower = 1.0f + 0.25f * random_dist_u32(generator, 0, 12);
@@ -237,7 +207,7 @@ int main() {
         size_t max_iter = random_dist_u32(
             generator, min_max_iter, max_max_iter
         );
-        test_mean(
+        test_median(
             array_count, bin_count, offset0, offset1,
             sigma_lower, sigma_upper, max_iter
         );

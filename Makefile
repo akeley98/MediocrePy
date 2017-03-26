@@ -31,7 +31,15 @@ tests/bin/convert_test: bin/testing.s bin/convert.s tests/bin/convert_test.s
 
 tests/bin/mean_test.s: tests/mean_test.c include/mean.h include/testing.h
 	$(CC) tests/mean_test.c -o tests/bin/mean_test.s
+	
+tests/bin/median_test.s: tests/median_test.c include/median.h include/testing.h
+	$(CC) tests/median_test.c -o tests/bin/median_test.s
 
 tests/bin/mean_test: bin/testing.s bin/convert.s bin/mean.s tests/bin/mean_test.s
 	$(LinkTest) bin/testing.s bin/convert.s bin/mean.s tests/bin/mean_test.s -o tests/bin/mean_test
+	
+tests/bin/median_test: bin/testing.s bin/convert.s bin/median.s tests/bin/median_test.s
+	$(LinkTest) bin/testing.s bin/convert.s bin/median.s tests/bin/median_test.s -o tests/bin/median_test
+	
+	
 	

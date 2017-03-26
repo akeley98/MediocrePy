@@ -36,7 +36,7 @@
  *  pointers  point  to a suitably (32 byte) aligned array with enough space
  *  for count __m256 vectors each.
  */
-void mergesort_m256(__m256* to_sort, size_t count, __m256* scratch);
+static void mergesort_m256(__m256* to_sort, size_t count, __m256* scratch);
 
 /*  Function for checking merge precondition: all 8 lanes in  the  array  of
  *  vector_count vectors must have their floats in ascending order.
@@ -116,11 +116,13 @@ static inline void clipped_median_chunk_m256(
 ) {
     assert(subarray_count >= 1);
     assert(group_size >= 1);
-    assert(group_size <= 0x7FFFFF);
+    assert(group_size <= 0x7FFFF0);
     
     const __m256 zero = _mm256_setzero_ps();
     const __m256 half = _mm256_set1_ps(0.5f);
-    const __m256 half_group_size_vector = _mm256_set1_ps(group_size / 2.0f);
+    const __m256 one  = _mm256_set1_ps(1.0f);
+    
+    const __m256 initial_counter = _mm256_set1_ps(group_size * 0.5f + 1.0f);
     
     for (size_t g = 0; g < subarray_count; ++g) {
         __m256* subarray = in2D + g * group_size;
@@ -128,12 +130,13 @@ static inline void clipped_median_chunk_m256(
         mergesort_m256(subarray, group_size, scratch);
         assert(is_sorted_m256(subarray, group_size));
         
+        __m256 clipped_count = _mm256_set1_ps((float)group_size);
+        __m256 previous_count = clipped_count;
+        
         __m256 clipped_median = _mm256_add_ps(
-            _mm256_mul_ps(half, subarray[group_size/2]),
-            _mm256_mul_ps(half, subarray[(group_size+1)/2])
+            _mm256_mul_ps(half, subarray[(group_size-1)/2]),
+            _mm256_mul_ps(half, subarray[group_size/2])
         );
-        __m256 previous_count = _mm256_set1_ps(-1.0f);
-        __m256 count = _mm256_div_ps(half_group_size_vector, half);
         
         struct ClipBoundsM256 bounds = {
             _mm256_set1_ps(-1.f/0.f), _mm256_set1_ps(1.f/0.f)
@@ -145,88 +148,71 @@ static inline void clipped_median_chunk_m256(
                 group_size,             // vector_count
                 bounds,                 // bounds
                 clipped_median,         // center
-                count,                  // clipped_count
+                clipped_count,          // clipped_count
                 sigma_lower,            // sigma_lower
                 sigma_upper             // sigma_upper
             );
             
             // Recalculate median.
-            __m256 median_index = half_group_size_vector;
-            count = half_group_size_vector;
+            __m256 counter = initial_counter;
+            clipped_count = _mm256_set1_ps((float)group_size);
             
-            for (size_t i = 0; i < group_size; ++i) {
-                const __m256 vec = subarray[i];
+            size_t i = 0, not_finished = 1;
+            
+            while (not_finished && i < group_size) {
+                __m256 tmp = subarray[i++];
+                tmp = _mm256_cmp_ps(tmp, bounds.lower, _CMP_LT_OQ);
+                not_finished = _mm256_movemask_ps(tmp);
                 
-                const __m256 half_if_below = _mm256_blendv_ps(
-                    zero, half,
-                    _mm256_cmp_ps(vec, bounds.lower, _CMP_LT_OQ)
+                clipped_count = _mm256_sub_ps(clipped_count,
+                    _mm256_blendv_ps(zero, one, tmp)
                 );
-                const __m256 half_if_above = _mm256_blendv_ps(
-                    zero, half,
-                    _mm256_cmp_ps(vec, bounds.upper, _CMP_GT_OQ)
-                );
-                median_index = _mm256_add_ps(median_index, half_if_below);
-                median_index = _mm256_sub_ps(median_index, half_if_above);
+                tmp = _mm256_blendv_ps(zero, half, tmp);
+                counter = _mm256_sub_ps(counter, tmp);
+            }
+            
+            i = group_size;
+            clipped_median = _mm256_setzero_ps();
+            int clipped_count_changed;
+            do {
+                __m256 const data = subarray[--i];
+                __m256 mask = _mm256_cmp_ps(data, bounds.upper, _CMP_GT_OQ);
                 
-                count = _mm256_sub_ps(count, half_if_below);
-                count = _mm256_sub_ps(count, half_if_above);
-            }
-            count = _mm256_div_ps(count, half);
+                counter = _mm256_sub_ps(counter,
+                    _mm256_blendv_ps(one, half, mask)
+                );
+                clipped_count = _mm256_sub_ps(clipped_count,
+                    _mm256_blendv_ps(zero, one, mask)
+                );
+                
+                clipped_count_changed = _mm256_movemask_ps(
+                    _mm256_cmp_ps(clipped_count, previous_count, _CMP_NEQ_OQ)
+                );
+                
+                // If there is at least one non-negative number in counter,
+                // then there are still some medians that have not been found.
+                not_finished = _mm256_movemask_ps(counter) == 0xFF ? 0 : -1;
+                
+                __m256 multiplier = _mm256_blendv_ps(
+                    zero, half, _mm256_cmp_ps(counter, one, _CMP_EQ_OQ)
+                );
+                multiplier = _mm256_or_ps(multiplier,
+                    _mm256_blendv_ps(
+                        zero, one, _mm256_cmp_ps(counter, half, _CMP_EQ_OQ)
+                    )
+                );
+                multiplier = _mm256_or_ps(multiplier,
+                    _mm256_blendv_ps(
+                        zero, half, _mm256_cmp_ps(counter, zero, _CMP_EQ_OQ)
+                    )
+                );
+                clipped_median = _mm256_add_ps(clipped_median,
+                    _mm256_mul_ps(multiplier, data)
+                );
+            } while ((i & not_finished));
             
-            previous_count = _mm256_cmp_ps(previous_count, count, _CMP_NEQ_OQ);
-            if (_mm256_movemask_ps(previous_count) == 0) {
-                break;
-            }
-            previous_count = count;
-            
-            const __m256i low_index = _mm256_cvtps_epi32(
-                _mm256_floor_ps(median_index)
-            );
-            
-            const __m256i high_index = _mm256_cvtps_epi32(
-                _mm256_ceil_ps(median_index)
-            );
-            
-            __m256i low_data = _mm256_undefined_ps();
-            
-            int32_t i0 = _mm256_extract_epi32(low_index, 0);
-            int32_t i1 = _mm256_extract_epi32(low_index, 1);
-            int32_t i2 = _mm256_extract_epi32(low_index, 2);
-            int32_t i3 = _mm256_extract_epi32(low_index, 3);
-            int32_t i4 = _mm256_extract_epi32(low_index, 4);
-            int32_t i5 = _mm256_extract_epi32(low_index, 5);
-            int32_t i6 = _mm256_extract_epi32(low_index, 6);
-            int32_t i7 = _mm256_extract_epi32(low_index, 7);
-            
-            low_data = _mm256_blend_ps(low_data, subarray[i0], 1 << 0);
-            low_data = _mm256_blend_ps(low_data, subarray[i1], 1 << 1);
-            low_data = _mm256_blend_ps(low_data, subarray[i2], 1 << 2);
-            low_data = _mm256_blend_ps(low_data, subarray[i3], 1 << 3);
-            low_data = _mm256_blend_ps(low_data, subarray[i4], 1 << 4);
-            low_data = _mm256_blend_ps(low_data, subarray[i5], 1 << 5);
-            low_data = _mm256_blend_ps(low_data, subarray[i6], 1 << 6);
-            low_data = _mm256_blend_ps(low_data, subarray[i7], 1 << 7);
-            
-            i0 = _mm256_extract_epi32(high_index, 0);
-            i1 = _mm256_extract_epi32(high_index, 1);
-            i2 = _mm256_extract_epi32(high_index, 2);
-            i3 = _mm256_extract_epi32(high_index, 3);
-            i4 = _mm256_extract_epi32(high_index, 4);
-            i5 = _mm256_extract_epi32(high_index, 5);
-            i6 = _mm256_extract_epi32(high_index, 6);
-            i7 = _mm256_extract_epi32(high_index, 7);
-            
-            clipped_median = _mm256_blend_ps(clipped_median, subarray[i0], 1);
-            clipped_median = _mm256_blend_ps(clipped_median, subarray[i1], 2);
-            clipped_median = _mm256_blend_ps(clipped_median, subarray[i2], 4);
-            clipped_median = _mm256_blend_ps(clipped_median, subarray[i3], 8);
-            clipped_median = _mm256_blend_ps(clipped_median, subarray[i4], 16);
-            clipped_median = _mm256_blend_ps(clipped_median, subarray[i5], 32);
-            clipped_median = _mm256_blend_ps(clipped_median, subarray[i6], 64);
-            clipped_median = _mm256_blend_ps(clipped_median, subarray[i7], 128);
-            
-            clipped_median = _mm256_add_ps(clipped_median, low_data);
-            clipped_median = _mm256_mul_ps(half, clipped_median);
+            if (!clipped_count_changed) break;
+            previous_count = clipped_count;
         }
         out[g] = clipped_median;
     }
@@ -281,13 +267,13 @@ int mediocre_clipped_median_u16(
                 chunk_item_count,               // item_count
                 array_count                     // stride
             );
-            clipped_median_chunk_m256(
-                out_chunk, in2D,
-                array_count, chunk_vector_count,
-                sigma_lower_vec, sigma_upper_vec,
-                max_iter, scratch
-            );
         }
+        clipped_median_chunk_m256(
+            out_chunk, in2D,
+            array_count, chunk_vector_count,
+            sigma_lower_vec, sigma_upper_vec,
+            max_iter, scratch
+        );
         uint16_t* final_output = out + chunk_item_count*c;
         err |= load_u16_from_m256(final_output, out_chunk, chunk_item_count);
     }
@@ -521,7 +507,7 @@ static void merge_m256(
     assert(is_sorted_m256(in + l_size, r_size));
     
     // The input and output pointers must not overlap.
-    assert((out + total_size < in) | (in + total_size < out));
+    assert((out + total_size <= in) | (in + total_size <= out));
     
     __m256 const one = _mm256_set1_ps(1.0f);
     __m256 const end_l = _mm256_set1_ps((float)(int)l_size);
@@ -594,7 +580,7 @@ static void merge_m256(
  *  for count __m256 vectors each.
  *       -> This comment is duplicated in the forward declaration. <-
  */
-void mergesort_m256(__m256* to_sort, size_t count, __m256* scratch) {
+static void mergesort_m256(__m256* to_sort, size_t count, __m256* scratch) {
     // The first step is to bubble sort short (32) groups of vectors.    
     // After that, we will merge those short runs of sorted vectors
     // into larger runs until the run length equals the array length.

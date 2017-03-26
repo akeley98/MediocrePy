@@ -21,6 +21,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <sys/timeb.h>
 
 #ifdef noexcept
@@ -60,6 +61,9 @@ void shuffle_u32(struct Random*, uint32_t* array, size_t bin_count) noexcept;
 // Destroy the random generator, freeing its resources.
 void delete_random(struct Random* generator) noexcept;
 
+// Sort floats in an array of the specified size.
+void sort_floats(float* array, size_t size) noexcept;
+
 // Return the difference between the current time and the timeb passed as an
 // argument (in milliseconds). Ignores the timezone and dstflag.
 static inline long ms_elapsed(struct timeb before) noexcept {
@@ -68,6 +72,12 @@ static inline long ms_elapsed(struct timeb before) noexcept {
     long before_ms = 1000L * before.time + before.millitm;
     long now_ms = 1000L * now.time + now.millitm;
     return now_ms - before_ms;
+}
+
+static inline void print_timer_elapsed(struct timeb before, size_t item_count) {
+    long ms = ms_elapsed(before);
+    double ns_per_item = ms * 1e6 / item_count;
+    printf("%lims elapsed (%4.2fns per item).", ms, ns_per_item);
 }
 
 /*  Canary page structure useful for detecting buffer overrun bugs.
