@@ -28,7 +28,7 @@
 #include "convert.h"
 #include "sigmautil.h"
 
-/*  Sort the numbers within the 8 lanes of the to_sort array[0...count -  1]
+/*  Sort the numbers within the 8 lanes of the to_sort array[0 ...  count-1]
  *  of vectors passed in. If it makes more sense, think of it like calling a
  *  scalar array sort function 8 times with a stride of 32 bytes instead  of
  *  4  bytes.  The  scratch  array  is  used  as  temporary  storage for the
@@ -122,17 +122,26 @@ static inline void clipped_median_chunk_m256(
     const __m256 half = _mm256_set1_ps(0.5f);
     const __m256 one  = _mm256_set1_ps(1.0f);
     
+    // More about this later.
     const __m256 initial_counter = _mm256_set1_ps(group_size * 0.5f + 1.0f);
     
     for (size_t g = 0; g < subarray_count; ++g) {
         __m256* subarray = in2D + g * group_size;
         
+        // We will sort the subarray and work with only the sorted numbers.
+        // Selection algorithm is neat but not easy to paralellize, so we sort.
         mergesort_m256(subarray, group_size, scratch);
         assert(is_sorted_m256(subarray, group_size));
         
+        // The count of numbers in each lane that are within the clipping range.
         __m256 clipped_count = _mm256_set1_ps((float)group_size);
+        
+        // That same quantity in the previous iteration. If the counts for the
+        // previous iteration of sigma clipping are the same as the counts for
+        // this iteration, then we can finish iteration early.
         __m256 previous_count = clipped_count;
         
+        // Calculate the median of all of the numbers.
         __m256 clipped_median = _mm256_add_ps(
             _mm256_mul_ps(half, subarray[(group_size-1)/2]),
             _mm256_mul_ps(half, subarray[group_size/2])
@@ -142,6 +151,44 @@ static inline void clipped_median_chunk_m256(
             _mm256_set1_ps(-1.f/0.f), _mm256_set1_ps(1.f/0.f)
         };
         
+      /** In  each  iteration,  calculate the median of the numbers within the
+       *  recalculated clipping bounds.  The  amazing,  enigmatic,  terrifying
+       *  counter variable has a lot to do with this recalculation.
+       *  
+       *  Each lane of the counter  variable  indirectly  encodes  information
+       *  about  where  the  median  of  the  in-range  numbers  is within the
+       *  corresponding lane of the list of all numbers. In the  second  loop,
+       *  where  we  iterate  backwards  through  the  subarray,  the  counter
+       *  variable sort of stores the remaining distance (plus half)  to  each
+       *  median  in  each  lane,  assuming  that  none  of the numbers in the
+       *  subarray are above the clipping range. Each iteration the  lanes  of
+       *  the  counter are decremented by one because in each iteration we get
+       *  one unit closer to the median. If a lane of the counter is one-half,
+       *  then  we reached the correct median position for an odd-length list,
+       *  and we store the number at that position as the  new  median.  If  a
+       *  lane of the counter is one or zero, then we are a half-unit above or
+       *  below the median's position, and we store half  of  each  position's
+       *  value  such  that  the sum of those values is the median (average of
+       *  the numbers on the two sides of the median position).
+       *  
+       *  Of course, the assumption that all of the numbers we  visit  in  the
+       *  backwards  iteration will be in bounds is false (more precisely, the
+       *  assumption that none will be above the upper bound is false). So, if
+       *  the  number at the position being visited in the backwards iteration
+       *  is out-of-range, we decrement the corresponding lane of the  counter
+       *  by only a half instead of one, since although we got one unit closer
+       *  to the median, we also discover that  the  actual  position  of  the
+       *  median  is  one-half of a unit farther away than we assumed (because
+       *  the size of the list of in-bounds numbers shrank by one).
+       *  
+       *  To set up the counter, we assume that the median  is  at  the  exact
+       *  halfway point of the subarray, initializing the value of the counter
+       *  to one plus half  of  the  length  of  the  subarray,  then  iterate
+       *  forwards from the beginning and decrement by half each time we see a
+       *  number that  is  below  the  clipping  range  (indicating  that  the
+       *  position  of  the  median  is  a  half-unit closer to the end of the
+       *  subarray than we had assumed).
+       */
         for (size_t iter = 0; iter != max_iter; ++iter) {
             bounds = sigma_clip_step(
                 subarray,               // data
@@ -153,12 +200,13 @@ static inline void clipped_median_chunk_m256(
                 sigma_upper             // sigma_upper
             );
             
-            // Recalculate median.
             __m256 counter = initial_counter;
             clipped_count = _mm256_set1_ps((float)group_size);
             
             size_t i = 0, not_finished = 1;
             
+            // Forwards iteration loop. Exit once none of the numbers in any
+            // of the lanes are below the lower bound of the clipping range.
             while (not_finished && i < group_size) {
                 __m256 tmp = subarray[i++];
                 tmp = _mm256_cmp_ps(tmp, bounds.lower, _CMP_LT_OQ);
@@ -171,6 +219,8 @@ static inline void clipped_median_chunk_m256(
                 counter = _mm256_sub_ps(counter, tmp);
             }
             
+            // Backwards iteration loop. Exit once all of the medians (or the
+            // 2 half-terms of a median of an even length list) are collected.
             i = group_size;
             clipped_median = _mm256_setzero_ps();
             int clipped_count_changed;
@@ -211,6 +261,7 @@ static inline void clipped_median_chunk_m256(
                 );
             } while ((i & not_finished));
             
+            // Do the comparisons and possible early exit for the clipped count.
             if (!clipped_count_changed) break;
             previous_count = clipped_count;
         }
@@ -376,8 +427,10 @@ int mediocre_clipped_median_u16(
     BUBBLE_UPWARDS_14(A, B, C, D, E, F, G, H, I, J, K, L, M, N, t); \
     BUBBLE_UPWARDS_2(N, O, t)
 
-//  Sort 8 lanes of count vectors using the most advanced sorting
-//  algorithm known to science: THE BUBBLE SORT!
+/*  Sort 8 lanes of count vectors using the most advanced sorting  algorithm
+ *  known  to science: THE BUBBLE SORT! We speed up this tired old algorithm
+ *  a bit by storing the lowest 13 to 15 vectors within registers.
+ */
 static void bubble_sort_m256(__m256* array, size_t count) {
     __m256 a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, tmp;
     switch (count) {
@@ -509,6 +562,54 @@ static void merge_m256(
     // The input and output pointers must not overlap.
     assert((out + total_size <= in) | (in + total_size <= out));
     
+    /*  Let me give a four minute dump of my  brain's  contents.  The  basic
+     *  idea  of  merging  two lists is to pick survivors. Each iteration we
+     *  have two choices of numbers from the two partitions  to  merge,  and
+     *  only  write  out  one number. The bigger number is the survivor, and
+     *  will be kept for the next iteration. The smaller number  loses,  and
+     *  gets  written  as  output, and the next number in the partition that
+     *  the loser comes from will replace it in the next iteration. In  this
+     *  algorithm,  the old_data and old_index variables store the value and
+     *  position of the surviving  data  in  each  lane.  The  new_data  and
+     *  new_index  variables  store the value and position of the new number
+     *  being considered in an iteration. We take this  perspective  of  old
+     *  and  new indexes rather than an index for one partition and an index
+     *  for the oher partition (as used by most merge algorithms) so that we
+     *  only  have  to reload new data from memory. The survivor will always
+     *  be known  and  can  be  reused  from  registers  from  the  previous
+     *  iteration.
+     *  
+     *  Anyway, at the end of each iteration we implement all of  the  logic
+     *  of  the  surviving  numbers using some mask logic. For each lane, if
+     *  the survivor from the previous iteration has  survived  again  (i.e.
+     *  old_data  is  greater  than  new_data),  then  we  keep old_data and
+     *  old_index as-is and only increment the new_index.  If  the  survivor
+     *  from  the  last iteration was instead written to the output, then we
+     *  move the new_data  and  new_index  to  the  old_data  and  old_index
+     *  (because the new data is the new survivor), and set the new_index to
+     *  one more than the old value of old_index (since the  new  data  will
+     *  now  come  from  the  partition that the old survivor came from). In
+     *  each case, the new_data is then loaded from memory then based on the
+     *  new_index.
+     *  
+     *  Except, there is one problem. It is not always true that we have two
+     *  choices  and  only one output each iteration. Towards the end one of
+     *  the partitions will run out of numbers, so we really only  have  one
+     *  choice.  This is encoded using the empty_partition_mask. If it's set
+     *  for a lane, in that lane the new_data will always be written and the
+     *  new_index  will  always be incremented by that lane, so in effect we
+     *  are just copying data from the remaining partition without  thinking
+     *  about  it.  In  a  lane's transition from the two-choice mode to the
+     *  one-choice mode, we copy that  same  lane's  data  in  old_data  and
+     *  old_index  to  new_data  and  new_index,  since  the  new_index  and
+     *  new_data variables is where the data  for  the  remaining  partition
+     *  will  be iterated over but the remaining partition must by necessity
+     *  be the one  that  the  surviving  data  came  from  (pointed  to  by
+     *  old_index). This is implemented using the at_end variable, which has
+     *  false in all of its lanes in every iteration in the  two-choice  and
+     *  one-choice  modes,  and  true in a lane only in the one iteration of
+     *  transition between the two modes.
+     */
     __m256 const one = _mm256_set1_ps(1.0f);
     __m256 const end_l = _mm256_set1_ps((float)(int)l_size);
     __m256 const end_r = _mm256_set1_ps((float)(int)total_size);
@@ -571,7 +672,7 @@ static void merge_m256(
     }
 }
 
-/*  Sort the numbers within the 8 lanes of the to_sort array[0...count -  1]
+/*  Sort the numbers within the 8 lanes of the to_sort array[0 ...  count-1]
  *  of vectors passed in. If it makes more sense, think of it like calling a
  *  scalar array sort function 8 times with a stride of 32 bytes instead  of
  *  4  bytes.  The  scratch  array  is  used  as  temporary  storage for the
@@ -606,11 +707,9 @@ static void mergesort_m256(__m256* to_sort, size_t count, __m256* scratch) {
         remainder = count % (2 * part_size);
         size_t r_remainder = remainder - l_remainder;
         
-        // printf("[0 %zu %zu]\n", l_remainder, l_remainder + r_remainder);
         merge_m256(dest, source, l_remainder, r_remainder);
         
         for (size_t i = remainder; i < count; i += 2*part_size) {
-            // printf("[%zu %zu %zu]\n", i, i + part_size, i + part_size * 2);
             merge_m256(dest + i, source + i, part_size, part_size);
         }
         scratch = dest;
