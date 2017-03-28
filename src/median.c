@@ -149,16 +149,15 @@ static inline void clipped_median_chunk_m256(
         
         struct ClipBoundsM256 bounds = {
             _mm256_set1_ps(-1.f/0.f), _mm256_set1_ps(1.f/0.f)
-        };
-        
-      /** In  each  iteration,  calculate the median of the numbers within the
-       *  recalculated clipping bounds.  The  amazing,  enigmatic,  terrifying
+        };        
+      /*  In each iteration, calculate the median of the  numbers  within  the
+       *  recalculated  clipping  bounds.  The  amazing, enigmatic, terrifying
        *  counter variable has a lot to do with this recalculation.
        *  
        *  Each lane of the counter  variable  indirectly  encodes  information
        *  about  where  the  median  of  the  in-range  numbers  is within the
-       *  corresponding lane of the list of all numbers. In the  second  loop,
-       *  where  we  iterate  backwards  through  the  subarray,  the  counter
+       *  corresponding lane of the sorted list of all numbers. In the  second
+       *  loop,  where  we iterate backwards through the subarray, the counter
        *  variable sort of stores the remaining distance (plus half)  to  each
        *  median  in  each  lane,  assuming  that  none  of the numbers in the
        *  subarray are above the clipping range. Each iteration the  lanes  of
@@ -183,11 +182,11 @@ static inline void clipped_median_chunk_m256(
        *  
        *  To set up the counter, we assume that the median  is  at  the  exact
        *  halfway point of the subarray, initializing the value of the counter
-       *  to one plus half  of  the  length  of  the  subarray,  then  iterate
-       *  forwards from the beginning and decrement by half each time we see a
-       *  number that  is  below  the  clipping  range  (indicating  that  the
-       *  position  of  the  median  is  a  half-unit closer to the end of the
-       *  subarray than we had assumed).
+       *  to  one  plus  half  of  the  length  of  the  subarray  using   the
+       *  initial_counter  variable,  then iterate forwards from the beginning
+       *  and decrement by half each time we see a number that  is  below  the
+       *  clipping  range  (indicating  that  the  position of the median is a
+       *  half-unit closer to the end of the subarray than we had assumed).
        */
         for (size_t iter = 0; iter != max_iter; ++iter) {
             bounds = sigma_clip_step(
@@ -562,7 +561,7 @@ static void merge_m256(
     // The input and output pointers must not overlap.
     assert((out + total_size <= in) | (in + total_size <= out));
     
-    /*  Let me give a four minute dump of my  brain's  contents.  The  basic
+    /*  Let me give a nine minute dump of my  brain's  contents.  The  basic
      *  idea  of  merging  two lists is to pick survivors. Each iteration we
      *  have two choices of numbers from the two partitions  to  merge,  and
      *  only  write  out  one number. The bigger number is the survivor, and

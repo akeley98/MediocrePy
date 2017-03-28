@@ -16,8 +16,8 @@
  *  along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef MediocrePy_TESTING_H_
-#define MediocrePy_TESTING_H_
+#ifndef MediocrePy_INLINE_TESTING_H_
+#define MediocrePy_INLINE_TESTING_H_
 
 #include <stddef.h>
 #include <stdint.h>

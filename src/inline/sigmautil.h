@@ -17,8 +17,8 @@
  *  along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef MediocrePy_SIGMAUTIL_H_
-#define MediocrePy_SIGMAUTIL_H_
+#ifndef MediocrePy_INLINE_SIGMAUTIL_H_
+#define MediocrePy_INLINE_SIGMAUTIL_H_
 
 #include <immintrin.h>
 

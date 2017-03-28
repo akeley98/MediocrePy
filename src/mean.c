@@ -177,6 +177,8 @@ static inline void clipped_mean_chunk_m256(
             __m256 sum = _mm256_setzero_ps();
             __m256 count = _mm256_setzero_ps();
             
+            // Todo consider using the Kahan summation algorithm.
+            
             for (size_t i = 0; i < group_size; ++i) {
                 // For each vector in the subarray and each lane within that
                 // vector, add zero if that lane's number is out of the

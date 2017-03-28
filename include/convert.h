@@ -24,6 +24,34 @@
 #include "emmintrin.h"
 #include "immintrin.h"
 
+static const int
+    mediocre_union_tag = 0x0,
+    mediocre_i16_tag = 0x1,
+    mediocre_u16_tag = 0x2,
+    mediocre_i32_tag = 0x3,
+    mediocre_u32_tag = 0x4,
+    mediocre_i64_tag = 0x6,
+    mediocre_u64_tag = 0x7,
+    mediocre_i8_tag = 0x8,
+    mediocre_u8_tag = 0x9,
+    mediocre_float_tag = 0xF,
+    mediocre_double_tag = 0xD,
+    mediocre_input_tag_mask = 0xF;
+
+static const int
+    mediocre_same_out_tag = 0x00,
+    mediocre_i16_out_tag = 0x10,
+    mediocre_u16_out_tag = 0x20,
+    mediocre_i32_out_tag = 0x30,
+    mediocre_u32_out_tag = 0x40,
+    mediocre_i64_out_tag = 0x60,
+    mediocre_u64_out_tag = 0x70,
+    mediocre_i8_out_tag = 0x80,
+    mediocre_u8_out_tag = 0x90,
+    mediocre_float_out_tag = 0xF0,
+    mediocre_double_out_tag = 0xD0,
+    mediocre_output_tag_mask = 0xF0;
+
 #ifdef __cplusplus
 extern "C" {
 #endif

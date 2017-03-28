@@ -24,6 +24,7 @@
 #include <assert.h>
 #include <emmintrin.h>
 #include <immintrin.h>
+#include <tmmintrin.h>
 
 #include <stdio.h>
 
