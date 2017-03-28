@@ -98,7 +98,7 @@ void sort_floats(float* array, size_t size) noexcept {
 
 /*  Initialize a canary page with space for data_size bytes of  data  and  a
  *  canary  of  canary_size bytes. The canary is optional and is useful only
- *  for substituting segfaults for softer errors. If the canary is set to  0
+ *  for substituting softer errors for segfaults. If the canary is set to  0
  *  bytes,  all  overruns  will  immediately result in a hard crash. Get the
  *  pointer to your data array by getting the .ptr  member  of  the  struct.
  *  Returns -1 if the struct could not be initialized, 0 if all is well.
@@ -136,6 +136,7 @@ int init_canary_page (
     
     if (page == MAP_FAILED) {
         free(canary_data);
+        out->ptr = NULL;
         perror("init_canary_page mmap");
         return -1;
     }

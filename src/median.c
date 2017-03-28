@@ -189,7 +189,7 @@ static inline void clipped_median_chunk_m256(
        *  half-unit closer to the end of the subarray than we had assumed).
        */
         for (size_t iter = 0; iter != max_iter; ++iter) {
-            bounds = sigma_clip_step(
+            bounds = get_new_clip_bounds(
                 subarray,               // data
                 group_size,             // vector_count
                 bounds,                 // bounds
@@ -271,7 +271,7 @@ static inline void clipped_median_chunk_m256(
     // that they are consumed as temporary storage by the function.
     assert(memset(in2D, 42, sizeof(__m256) * group_size * subarray_count));
 }
-
+/*
 int mediocre_clipped_median_u16(
     uint16_t* out,
     uint16_t const* const* data,
@@ -350,6 +350,29 @@ int mediocre_clipped_median_u16(
     free(allocated);
     
     return err;
+}
+*/
+#include "chunkutil.h" // XXX move this to the top later.
+
+int mediocre_clipped_median_u16(
+    uint16_t* out,
+    uint16_t const* const* data,
+    size_t array_count,
+    size_t bin_count,
+    double sigma_lower,
+    double sigma_upper, 
+    size_t max_iter
+) {
+    return process_chunks(
+        out, 116,
+        data, 116,
+        clipped_median_chunk_m256,
+        array_count,
+        bin_count,
+        sigma_lower,
+        sigma_upper,
+        max_iter
+    );
 }
 
 /**************************************************************************

@@ -222,7 +222,7 @@ static void test_mean(
 }
 
 int main() {
-    generator = new_random();
+    generator = new_random1(1337);
     
     for (size_t i = 0; i < 24; ++i) {
         size_t array_count = random_dist_u32(

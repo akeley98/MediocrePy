@@ -1,11 +1,12 @@
 
+#include "chunkutil.h"
+
 #include <stdatomic.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 
-#include "chunkutil.h"
 #include "convert.h"    // Todo replace this file to support non-uint16_t input.
 
 struct MediocreLoaderThread {
@@ -13,18 +14,17 @@ struct MediocreLoaderThread {
     
     atomic_intptr_t start_bin_index;
     atomic_intptr_t output_pointer;
-    atomic_intptr_t bin_count; // Wait for this to be nonzero to begin.
+    atomic_intptr_t bin_count; // Loader waits for this to be nonzero to begin.
     atomic_intptr_t loader_ready_flag;
     
-    void const* input_pointers,
-    uintptr_t input_type_code,
-    size_t input_pointer_count
+    void const* input_pointers;
+    uintptr_t input_type_code;
+    size_t input_pointer_count;
 };
 
 static inline void wait_for_true_atomic(atomic_intptr_t* a) {
-    struct timespec t;
     while (!atomic_load(a)) {
-        t = { 0, 5000 }; // 5 microseconds.
+        struct timespec t = { 0, 1000 }; // 1 microsecond.
         nanosleep(&t, &t);
     }
 }
@@ -44,7 +44,7 @@ struct MediocreLoaderThread* mediocre_create_loader_thread(
         fprintf(stderr, "Could not allocate thread_data.\n");
         return NULL;
     }
-    memset(s, 0, sizeof *s);
+    memset(thread_data, 0, sizeof *thread_data);
     
     int create_code = pthread_create(
         &thread_data->handle, NULL, loader_start_function, thread_data
@@ -56,7 +56,7 @@ struct MediocreLoaderThread* mediocre_create_loader_thread(
         return NULL;
     }
     
-    store_atomic(&thread_data->loader_ready_flag, 1);
+    atomic_store(&thread_data->loader_ready_flag, 1);
     thread_data->input_pointers = input_pointers;
     thread_data->input_type_code = input_type_code;
     thread_data->input_pointer_count = input_pointer_count;
@@ -119,7 +119,7 @@ void mediocre_delete_loader_thread(struct MediocreLoaderThread* thread_data) {
         abort();
     }
     
-    fprintf(stderr, "Deleted loader thread.\n"); // XXX remove later.
+    fprintf(stderr, "\x1b[33mDeleted loader thread.\x1b[0m\n"); // XXX
     
     free(thread_data);
 }
@@ -139,9 +139,34 @@ static void* loader_start_function(void* thread_data_pv) {
         (struct MediocreLoaderThread*)thread_data_pv;
     
     while (1) {
-        wait_for_true_atomic(thread_data->end_bin_index);
+        wait_for_true_atomic(&thread_data->bin_count);
         
+        const size_t start_bin_index = (size_t)atomic_load(
+            &thread_data->start_bin_index
+        );
+        __m256* output = (__m256*)atomic_load(
+            &thread_data->output_pointer
+        );
+        const size_t bin_count = (size_t)atomic_load(
+            &thread_data->bin_count
+        );
         
+        atomic_store(&thread_data->bin_count, 0);
+        
+        uint16_t const* const* data =
+            (uint16_t const* const*)thread_data->input_pointers;
+        
+        assert(thread_data->input_type_code == 116); // XXX
+        size_t array_count = thread_data->input_pointer_count;
+        for (size_t a = 0; a < array_count; ++a) {
+            load_m256_from_u16_stride(
+                output + a,
+                data[a] + start_bin_index,
+                bin_count,        // item_count
+                array_count       // stride
+            );
+        }
+        atomic_store(&thread_data->loader_ready_flag, 1);
     }
 }
 

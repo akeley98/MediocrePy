@@ -24,6 +24,7 @@
 #include <immintrin.h>
 #include <emmintrin.h>
 
+#include "chunkutil.h"
 #include "convert.h"
 #include "sigmautil.h"
 
@@ -119,12 +120,13 @@ int mediocre_mean_u16(
  */
 static inline void clipped_mean_chunk_m256(
     __m256* out,
-    __m256 const* in2D,
+    __m256* in2D,
     size_t group_size,
     size_t subarray_count,
     __m256d sigma_lower,
     __m256d sigma_upper,
-    size_t max_iter
+    size_t max_iter,
+    __m256* unused
 ) {
     assert(subarray_count >= 1);
     assert(group_size >= 1);
@@ -207,7 +209,7 @@ static inline void clipped_mean_chunk_m256(
             // Now we know that we should continue iterating, calculate
             // the new bounds to be used for next iteration's calculation
             // of the mean.
-            bounds = sigma_clip_step(
+            bounds = get_new_clip_bounds(
                 subarray,               // data
                 group_size,             // vector_count
                 bounds,                 // bounds
@@ -221,6 +223,27 @@ static inline void clipped_mean_chunk_m256(
     }
 }
 
+int mediocre_clipped_mean_u16(
+    uint16_t* out,
+    uint16_t const* const* data,
+    size_t array_count,
+    size_t bin_count,
+    double sigma_lower,
+    double sigma_upper,
+    size_t max_iter
+) {
+    return process_chunks(
+        out, 116,
+        data, 116,
+        clipped_mean_chunk_m256,
+        array_count,
+        bin_count,
+        sigma_lower,
+        sigma_upper,
+        max_iter
+    );
+}
+/*
 int mediocre_clipped_mean_u16(
     uint16_t* out,
     uint16_t const* const* data,
@@ -299,4 +322,5 @@ int mediocre_clipped_mean_u16(
     
     return err;
 }
+*/
 

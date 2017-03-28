@@ -79,7 +79,7 @@ static inline __m256 sigma_mask(__m256 arg, struct ClipBoundsM256 bounds) {
  *  bound), then the new bounds will be  adjusted  to  fit  within  the  old
  *  bounds (using min and max).
  */
-static inline struct ClipBoundsM256 sigma_clip_step(
+static inline struct ClipBoundsM256 get_new_clip_bounds(
     __m256 const* data,
     size_t vector_count,
     struct ClipBoundsM256 bounds,
