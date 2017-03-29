@@ -158,13 +158,8 @@ def main():
     # Normalize the data based on the middle of the first extension???
     flatdiv = np.median(combined_chips[1][500:1600, 1000:3500])
     
-    print combined_chips[1][10,10]
-    
-    print "flatdiv = %f" % flatdiv # XXX
     for chipnum in xrange(1, 5):
         combined_chips[chipnum] = combined_chips[chipnum] / flatdiv
-    
-    print combined_chips[1][10, 10]
     
     hdulist = fits.HDUList(
         [fits.PrimaryHDU()] +
