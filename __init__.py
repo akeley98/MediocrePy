@@ -172,3 +172,5 @@ def main():
     )
     hdulist.writeto(output_name)
 
+if __name__ == "__main__":
+    main()
