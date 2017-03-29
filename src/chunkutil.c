@@ -1,3 +1,22 @@
+/*  An aggresively average SIMD python module
+ *  Implementation of the data loader thread. The functions must be visible
+ *  to the linker, so we include the mediocre_ prefix, but they are not
+ *  intended for use outside of the library.
+ *  Copyright (C) 2017 David Akeley
+ *  
+ *  This program is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *  
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ *  GNU General Public License for more details.
+ *  
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
 
 #include "chunkutil.h"
 
@@ -86,7 +105,7 @@ struct MediocreLoaderThread* mediocre_create_loader_thread(
  *      [  9.0,  10.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0],
  *      [109.0, 110.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0]
  */
-void mediocre_loader_load_chunk(
+void mediocre_loader_begin_load(
     struct MediocreLoaderThread* thread_data,
     __m256* output,
     size_t start_bin_index,
@@ -118,14 +137,12 @@ void mediocre_delete_loader_thread(struct MediocreLoaderThread* thread_data) {
         perror("mediocre internal error pthread_join");
         abort();
     }
-    
-    fprintf(stderr, "\x1b[33mDeleted loader thread.\x1b[0m\n"); // XXX
-    
+    assert(fprintf(stderr, "debug: \x1b[33mDeleted loader thread.\x1b[0m\n"));
     free(thread_data);
 }
 
 /*  Function  that  sits   around   until   it   receives   a   command   from
- *  mediocre_loader_load_chunk  (which  modifies  the  atomic variables in the
+ *  mediocre_loader_begin_load  (which  modifies  the  atomic variables in the
  *  thread_data struct. The function waits for bin_count to be nonzero,  which
  *  the  commanding function sets last. Once it's given a command, it sets the
  *  loader_ready_flag to zero and loads, converts, and  interleaves  the  data

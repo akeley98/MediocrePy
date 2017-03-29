@@ -13,10 +13,10 @@ static struct Random* generator;
 static struct timeb timer_begin;
 
 static const size_t max_offset = 15;           // Array can be offset to test
-static const size_t min_array_count = 200;     // for alignment bugs.
-static const size_t max_array_count = 200;
-static const size_t min_bin_count = 190000;
-static const size_t max_bin_count = 200000;
+static const size_t min_array_count = 1;       // for alignment bugs.
+static const size_t max_array_count = 400;
+static const size_t min_bin_count = 400000;
+static const size_t max_bin_count = 500000;
 static const uint32_t min_max_iter = 0;
 static const uint32_t max_max_iter = 15;
 
@@ -78,7 +78,7 @@ static void test_median(
     assert(offset0 <= max_offset);
     assert(offset1 <= max_offset);
     
-    uint16_t* input_pointers[max_array_count];
+    static uint16_t* input_pointers[max_array_count];
     for (size_t i = 0; i < max_array_count; ++i) {
         input_pointers[i] = NULL;
     }
@@ -191,7 +191,7 @@ static void test_median(
 }
 
 int main() {
-    generator = new_random1(1337);
+    generator = new_random();
     
     for (size_t i = 0; i < 60; ++i) {
         size_t array_count = random_dist_u32(

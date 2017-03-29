@@ -24,6 +24,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>  // This should change.
 #include <immintrin.h>
 
 #include "convert.h" // Replace later to support non-uint16_t input.
@@ -36,7 +37,7 @@ struct MediocreLoaderThread* mediocre_create_loader_thread(
     size_t input_pointer_count
 );
 
-void mediocre_loader_load_chunk(
+void mediocre_loader_begin_load(
     struct MediocreLoaderThread*,
     __m256* output,
     size_t start_bin_index,
@@ -72,23 +73,23 @@ static inline int process_chunks(
     size_t max_iter
 ) {
     // XXX Rewrite later to support ALL types, not just uint16_t.    
-    assert(output_type_code == 116);
     assert(input_type_code == 116);
     
     if (input_pointer_count == 0) {
-        fprintf(stderr, "No input pointers.\n");
+        fprintf(stderr, "mediocre: No input pointers.\n");
         errno = EINVAL;
         return -1;
     } else if (array_bin_count == 0) {
-        fprintf(stderr, "Empty arrays passed.\n");
+        fprintf(stderr, "mediocre: Empty arrays passed.\n");
         errno = EINVAL;
         return -1;
     } else if (sigma_lower < 1. || sigma_upper < 1.) {
-        fprintf(stderr, "Invalid sigma bounds (bounds should be >= 1.0).\n");
+        fprintf(stderr,
+            "mediocre: Invalid sigma bounds (bounds should be >= 1.0).\n");
         errno = EINVAL;
         return -1;
     } else if (input_pointer_count > 1000000) {
-        fprintf(stderr, "Too many input pointers.\n");
+        fprintf(stderr, "mediocre: Too many input pointers.\n");
         errno = E2BIG;
         return -1;
     }
@@ -96,11 +97,20 @@ static inline int process_chunks(
     int err = 0;
     const size_t chunk_subarray_count = 256;
     
-    // We need 4 arrays for temporary storage:
+    // We need four arrays for temporary storage:
     // * The scratch array used for temporary storage by the combine function.
     //   This must be big enough to fit one __m256 for each input array.
     // * The output array for the combine function. This array must be big
-    //   enough XXX
+    //   enough to fit one __m256 for each subarray in a full-sized chunk.
+    // * The loader_output and combine_input arrays must be big enough
+    //   to fit chunk_subarray_count subarrays [0 ... input_pointer_count-1]
+    //   of __m256 vectors. For each iteration in which we process a chunk
+    //   of data, the loader_output and combine_input arrays swap, such that
+    //   the loader thread and combine functions work on separate regions of
+    //   memory in each iteration, and the combine function takes as input
+    //   the output written in the previous iteration by the loader thread.
+    // All four arrays will be created at once by allocating a chunk of memory
+    // big enough to fit all four arrays and then dividing the memory up.
     const size_t workspace_vector_count =
         + (2 * input_pointer_count * chunk_subarray_count)
         + (chunk_subarray_count)
@@ -114,6 +124,7 @@ static inline int process_chunks(
         assert(errno == ENOMEM);
         return -1;
     }
+    // Assign different regions of the allocated workspace to each array.
     __m256* workspace_end = workspace + workspace_vector_count;
     __m256* loader_output =
         workspace_end - input_pointer_count*chunk_subarray_count;
@@ -149,7 +160,7 @@ static inline int process_chunks(
     size_t current_group_count =
         array_bin_count - chunk_count * chunk_group_count;
     size_t current_subarray_count = (current_group_count + 7) / 8;
-    mediocre_loader_load_chunk(
+    mediocre_loader_begin_load(
         loader,
         loader_output,
         chunk_count * chunk_group_count,
@@ -167,7 +178,7 @@ static inline int process_chunks(
             mediocre_delete_loader_thread(loader);
         } else {
             // Load the chunk before the chunk being combined.
-            mediocre_loader_load_chunk(
+            mediocre_loader_begin_load(
                 loader,
                 loader_output,
                 (current_chunk-1) * chunk_group_count,
@@ -186,12 +197,23 @@ static inline int process_chunks(
         );
         
         // Again, rewrite the output to be to any type, not just uint16_t.
-        assert(output_type_code == 116);
-        load_u16_from_m256(
-            (uint16_t*)output + current_chunk*chunk_group_count,
-            combine_output,
-            current_group_count
-        );
+        if (output_type_code == 116) {
+            load_u16_from_m256(
+                (uint16_t*)output + current_chunk*chunk_group_count,
+                combine_output,
+                current_group_count
+            );
+        } else if (output_type_code == 0xF) {
+            memcpy(
+                (float*)output + current_chunk*chunk_group_count,
+                combine_output,
+                sizeof(float) * current_group_count
+            );
+        } else {
+            // XXX
+            fprintf(stderr, "Unknown output type %lu.\n", output_type_code);
+            err = -1;
+        }
         // All chunks will have the same number of subarrays, except for the
         // first one processed (at the END of the input).
         current_subarray_count = chunk_subarray_count;

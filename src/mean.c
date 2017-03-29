@@ -243,84 +243,25 @@ int mediocre_clipped_mean_u16(
         max_iter
     );
 }
-/*
-int mediocre_clipped_mean_u16(
-    uint16_t* out,
-    uint16_t const* const* data,
+
+int mediocre_clipped_mean(
+    void* out, uintptr_t output_type_code,
+    void const* input_pointers, uintptr_t input_type_data,
     size_t array_count,
     size_t bin_count,
     double sigma_lower,
     double sigma_upper,
     size_t max_iter
 ) {
-    if (
-        array_count == 0 || bin_count == 0 ||
-        sigma_lower < 1. || sigma_upper < 1.
-    ) {
-        errno = EINVAL;
-        return -1;
-    }
-    int err = 0;
-    const __m256d sigma_lower_vec = _mm256_set1_pd(sigma_lower);
-    const __m256d sigma_upper_vec = _mm256_set1_pd(sigma_upper);
-    const size_t chunk_vector_count = 2048;
-    const size_t chunk_item_count = chunk_vector_count * 8;
-    
-    const size_t chunk_count = bin_count / chunk_item_count;
-    __m256* allocated = (__m256*)aligned_alloc(
-        sizeof(__m256), (1 + array_count) * chunk_vector_count * sizeof(__m256)
+    return process_chunks(
+        out, output_type_code,
+        input_pointers, input_type_data,
+        clipped_mean_chunk_m256,
+        array_count,
+        bin_count,
+        sigma_lower,
+        sigma_upper,
+        max_iter
     );
-    
-    if (allocated == NULL) {
-        assert(errno == ENOMEM);
-        return -1;
-    }
-    
-    __m256* out_chunk = allocated;
-    __m256* in2D = allocated + chunk_vector_count;
-    
-    for (size_t c = 0; c < chunk_count; ++c) {
-        // Set up the in2D array the way clipped_mean_chunk_m256 expects it.
-        for (size_t a = 0; a < array_count; ++a) {
-            load_m256_from_u16_stride(
-                in2D + a,
-                data[a] + chunk_item_count*c,
-                chunk_item_count,               // item_count
-                array_count                     // stride
-            );
-        }
-        clipped_mean_chunk_m256(
-            out_chunk, in2D,
-            array_count, chunk_vector_count,
-            sigma_lower_vec, sigma_upper_vec,
-            max_iter
-        );
-        uint16_t* final_output = out + chunk_item_count*c;
-        err |= load_u16_from_m256(final_output, out_chunk, chunk_item_count);
-    }
-    size_t remainder = bin_count % chunk_item_count;
-    size_t remainder_vector_count = (remainder + 7) / 8;
-    if (remainder != 0) {
-        for (size_t a = 0; a < array_count; ++a) {
-            load_m256_from_u16_stride(
-                in2D + a,
-                data[a] + chunk_item_count*chunk_count,
-                remainder,          // item_count
-                array_count         // stride
-            );
-        }
-        clipped_mean_chunk_m256(
-            out_chunk, in2D,
-            array_count, remainder_vector_count,
-            sigma_lower_vec, sigma_upper_vec,
-            max_iter
-        );
-        uint16_t* final_output = out + chunk_item_count*chunk_count;
-        err |= load_u16_from_m256(final_output, out_chunk, remainder);
-    }
-    free(allocated);
-    
-    return err;
 }
-*/
 

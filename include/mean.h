@@ -54,6 +54,16 @@ int mediocre_clipped_mean_u16(
     size_t max_iter
 );
 
+int mediocre_clipped_mean(
+    void* out, uintptr_t output_type_code,
+    void const* input_pointers, uintptr_t input_type_data,
+    size_t array_count,
+    size_t bin_count,
+    double sigma_lower,
+    double sigma_upper,
+    size_t max_iter
+);
+
 static inline int mediocre_clipped_mean_mu16(
     uint16_t* out,
     uint16_t* const* data,
