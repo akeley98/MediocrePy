@@ -25,8 +25,9 @@
 #include <immintrin.h>
 #include <emmintrin.h>
 
-#include "chunkutil.h"
 #include "convert.h"
+#include "loaderfunction.h"
+#include "loaderthread.h"
 #include "sigmautil.h"
 
 /*  Sort the numbers within the 8 lanes of the to_sort array[0 ...  count-1]
@@ -273,6 +274,19 @@ static inline void clipped_median_chunk_m256(
     assert(memset(in2D, 42, sizeof(__m256) * group_size * subarray_count));
 }
 
+static int u16_loader(struct MediocreLoaderArg arg) {
+    uint16_t const* const* arrays = (uint16_t const* const*)arg.input.arrays;
+    for (size_t a = 0; a < arg.input.array_count; ++a) {
+        load_m256_from_u16_stride(
+            arg.command.output + a,
+            arrays[a] + arg.command.start_index,
+            arg.command.length,
+            arg.input.array_count
+        );
+    }
+    return 0;
+}
+
 int mediocre_clipped_median_u16(
     uint16_t* out,
     uint16_t const* const* data,
@@ -282,12 +296,11 @@ int mediocre_clipped_median_u16(
     double sigma_upper, 
     size_t max_iter
 ) {
-    return process_chunks(
+    return combine_chunks(
         out, 116,
-        data, 116,
+        (struct MediocreInputData){ data, array_count, bin_count, NULL },
+        u16_loader,
         clipped_median_chunk_m256,
-        array_count,
-        bin_count,
         sigma_lower,
         sigma_upper,
         max_iter
@@ -295,20 +308,20 @@ int mediocre_clipped_median_u16(
 }
 
 int mediocre_clipped_median(
-    void* out, uintptr_t output_type_code,
-    void const* input_pointers, uintptr_t input_type_data,
-    size_t array_count,
-    size_t bin_count,
+    void* out,
+    int output_type_code,
+    struct MediocreInputData input,
+    int (*loader_function)(struct MediocreLoaderArg),
     double sigma_lower,
     double sigma_upper,
     size_t max_iter
 ) {
-    return process_chunks(
-        out, output_type_code,
-        input_pointers, input_type_data,
+    return combine_chunks(
+        out,
+        output_type_code,
+        input,
+        loader_function,
         clipped_median_chunk_m256,
-        array_count,
-        bin_count,
         sigma_lower,
         sigma_upper,
         max_iter

@@ -15,15 +15,30 @@
  *  along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#ifndef MediocrePy_MEDIAN_H_
+#define MediocrePy_MEDIAN_H_
+
 #include <stddef.h>
 #include <stdint.h>
 #include <emmintrin.h>
 #include <immintrin.h>
 
-#ifndef MediocrePy_MEDIAN_H_
-#define MediocrePy_MEDIAN_H_
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-static const size_t mediocre_max_array_count = 10000000;
+struct MediocreInputData;
+struct MediocreLoaderArg;
+
+int mediocre_clipped_median(
+    void* out,
+    int output_type_code,
+    struct MediocreInputData input,
+    int (*loader_function)(struct MediocreLoaderArg),
+    double sigma_lower,
+    double sigma_upper,
+    size_t max_iter
+);
 
 int mediocre_clipped_median_u16(
     uint16_t* out,
@@ -32,16 +47,6 @@ int mediocre_clipped_median_u16(
     size_t bin_count,
     double sigma_lower,
     double sigma_upper, 
-    size_t max_iter
-);
-
-int mediocre_clipped_median(
-    void* out, uintptr_t output_type_code,
-    void const* input_pointers, uintptr_t input_type_data,
-    size_t array_count,
-    size_t bin_count,
-    double sigma_lower,
-    double sigma_upper,
     size_t max_iter
 );
 
@@ -60,6 +65,10 @@ static inline int mediocre_clipped_median_mu16(
         sigma_lower, sigma_upper, max_iter
     );
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 

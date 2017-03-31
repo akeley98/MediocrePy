@@ -24,52 +24,10 @@
 #include <immintrin.h>
 #include <emmintrin.h>
 
-#include "chunkutil.h"
 #include "convert.h"
+#include "loaderfunction.h"
+#include "loaderthread.h"
 #include "sigmautil.h"
-
-
-int mediocre_mean_u16(
-    uint16_t* out,
-    uint16_t const* const* data,
-    size_t array_count,
-    size_t bin_count
-) {
-    if (array_count == 0 || bin_count == 0) {
-        errno = EINVAL;
-        return -1;
-    }
-    // vector_count is the number of __m256 vectors needed to store bin_count
-    // floats. This is equal to bin_count / 8, rounded up.
-    const size_t vector_count = (bin_count + 7) / 8;
-    
-    // accumulator is the buffer that we will use to sum up each lane of
-    // the input arrays.
-    // i.e. accumulator[n] = sum(data[i][n] for i := 0 to bin_count - 1)
-    __m256* accumulator = aligned_alloc(
-        sizeof(__m256), vector_count * sizeof(__m256));
-    
-    if (accumulator == NULL) {
-        assert(errno == ENOMEM);
-        return -1;
-    }
-    
-    load_m256_from_u16(accumulator, data[0], bin_count);
-    
-    for (size_t a = 1; a < array_count; ++a) {
-        iadd_m256_by_u16(accumulator, data[a], bin_count);
-    }
-    
-    __m256 divisor_vector = _mm256_set1_ps((float)array_count);
-    for (size_t i = 0; i < vector_count; ++i) {
-        accumulator[i] = _mm256_div_ps(accumulator[i], divisor_vector);
-    }
-    
-    load_u16_from_m256(out, accumulator, bin_count);
-    
-    free(accumulator);
-    return 0;
-}
 
 /*  Calculate the sigma clipped mean of groups  of  floating  point  numbers
  *  with lower and upper sigma bounds passed as specified below.
@@ -128,6 +86,7 @@ static inline void clipped_mean_chunk_m256(
     size_t max_iter,
     __m256* unused
 ) {
+    (void)unused;
     assert(subarray_count >= 1);
     assert(group_size >= 1);
     assert(group_size <= 0xFFFFFF);
@@ -158,9 +117,6 @@ static inline void clipped_mean_chunk_m256(
         // Once there is no change in each lane (or we iterate until max_iter),
         // finish iterating, write out each lane of the final clipped_mean 
         // output, and move on to the next group of 8-lane vectors.
-        // 
-        // In truth, I wonder if the branch (mis)prediction costs are more
-        // than the time saved by finishing iteration early (probably not).
         __m256 const* const subarray = in2D + g * group_size;
         
         __m256 clipped_mean;
@@ -223,6 +179,19 @@ static inline void clipped_mean_chunk_m256(
     }
 }
 
+static int u16_loader(struct MediocreLoaderArg arg) {
+    uint16_t const* const* arrays = (uint16_t const* const*)arg.input.arrays;
+    for (size_t a = 0; a < arg.input.array_count; ++a) {
+        load_m256_from_u16_stride(
+            arg.command.output + a,
+            arrays[a] + arg.command.start_index,
+            arg.command.length,
+            arg.input.array_count
+        );
+    }
+    return 0;
+}
+
 int mediocre_clipped_mean_u16(
     uint16_t* out,
     uint16_t const* const* data,
@@ -232,12 +201,11 @@ int mediocre_clipped_mean_u16(
     double sigma_upper,
     size_t max_iter
 ) {
-    return process_chunks(
+    return combine_chunks(
         out, 116,
-        data, 116,
+        (struct MediocreInputData){ data, array_count, bin_count, NULL },
+        u16_loader,
         clipped_mean_chunk_m256,
-        array_count,
-        bin_count,
         sigma_lower,
         sigma_upper,
         max_iter
@@ -245,20 +213,20 @@ int mediocre_clipped_mean_u16(
 }
 
 int mediocre_clipped_mean(
-    void* out, uintptr_t output_type_code,
-    void const* input_pointers, uintptr_t input_type_data,
-    size_t array_count,
-    size_t bin_count,
+    void* out,
+    int output_type_code,
+    struct MediocreInputData input,
+    int (*loader_function)(struct MediocreLoaderArg),
     double sigma_lower,
     double sigma_upper,
     size_t max_iter
 ) {
-    return process_chunks(
-        out, output_type_code,
-        input_pointers, input_type_data,
+    return combine_chunks(
+        out,
+        output_type_code,
+        input,
+        loader_function,
         clipped_mean_chunk_m256,
-        array_count,
-        bin_count,
         sigma_lower,
         sigma_upper,
         max_iter

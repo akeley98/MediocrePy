@@ -27,36 +27,22 @@
 extern "C" {
 #endif
 
-int mediocre_mean_u16(
-    uint16_t* out,
-    uint16_t const* const* data,
-    size_t array_count,
-    size_t bin_count
-);
+struct MediocreInputData;
+struct MediocreLoaderArg;
 
-static inline int mediocre_mean_mu16(
-    uint16_t* out,
-    uint16_t* const* data,
-    size_t array_count,
-    size_t bin_count
-) {
-    uint16_t const* const* const_data = (uint16_t const* const*)data;
-    return mediocre_mean_u16(out, const_data, array_count, bin_count);
-}
-
-int mediocre_clipped_mean_u16(
-    uint16_t* out,
-    uint16_t const* const* data,
-    size_t array_count,
-    size_t bin_count,
+int mediocre_clipped_mean(
+    void* out,
+    int output_type_code,
+    struct MediocreInputData input,
+    int (*loader_function)(struct MediocreLoaderArg),
     double sigma_lower,
     double sigma_upper,
     size_t max_iter
 );
 
-int mediocre_clipped_mean(
-    void* out, uintptr_t output_type_code,
-    void const* input_pointers, uintptr_t input_type_data,
+int mediocre_clipped_mean_u16(
+    uint16_t* out,
+    uint16_t const* const* data,
     size_t array_count,
     size_t bin_count,
     double sigma_lower,
