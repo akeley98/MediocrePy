@@ -138,6 +138,11 @@ def median(
         sigma_iter=sigma_iter
     )
 
+def get_normalized(array):
+    flatdiv = np.median(array[500:1600, 1000:3500])
+    result = np.copy(array) / flatdiv
+    return result
+
 # Demo program for fits files with 4 4608 by 2048 chips (16 bit unsigned)
 def main():
     import astropy.io.fits as fits
@@ -155,7 +160,7 @@ def main():
     combined_chips = [None] * 5
     
     for chipnum in xrange(1, 5):
-        chips = [lst[chipnum].data[0:4608, 0:2048] for lst in hdu_lists]
+        chips = [get_normalized(lst[chipnum].data[0:4608, 0:2048]) for lst in hdu_lists]
         
         combined_chips[chipnum] = f(
             chips, sigma_iter=sigma_iter
