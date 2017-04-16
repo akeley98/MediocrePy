@@ -1,5 +1,5 @@
 # MediocrePy
-An aggressively average SIMD python module (16-bit array averages with sigma clipping)
+An aggressively average SIMD python module (array averages with sigma clipping)
 
 Internally, the module uses 256-bit single precision floating point vectors everywhere. This will require the AVX instruction set, introduced in 2011 (Sandy Bridge or later for Intel, Bulldozer or later for AMD, I think). Keep in mind that compilers are often no help when it comes to memory alignment for such vector data types, so be vigilant.
 
