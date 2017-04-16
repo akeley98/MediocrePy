@@ -75,12 +75,12 @@ def _call(
         except KeyError:
             raise TypeError("Cannot use array of %s as argument" % a.dtype.name)
         
-        stride_arrays[i] = [
-            a.ctypes.data,
-            array_typecode,
-            a.shape[-1],
-            a.strides[0],
-            a.strides[-1],
+        stride_arrays[i] = [    # See strideloader.h for struct definition.
+            a.ctypes.data,      # Pointer to data
+            array_typecode,     # Array type code
+            a.shape[-1],        # Least-significant axis item count
+            a.strides[0],       # Most-significant axis stride (unused for 1D).
+            a.strides[-1],      # Least-significant axis stride
         ]
     
     output = np.empty(shape=shape, dtype=np.float32, order="C")

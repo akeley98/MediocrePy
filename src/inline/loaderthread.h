@@ -29,6 +29,12 @@
 
 struct MediocreLoaderThread;
 
+static inline void* MISSING_FUNCTION(size_t size, size_t alignment) {
+    void* result;
+    posix_memalign(&result, size, alignment);
+    return result;
+}
+
 typedef void (*mediocre_combine_function)(
     __m256* output,
     __m256* chunks,
@@ -176,7 +182,7 @@ static inline int combine_chunks(
         + (chunk_subarray_count)
         + (input.array_count);
     
-    __m256* workspace = (__m256*)aligned_alloc(
+    __m256* workspace = (__m256*)MISSING_FUNCTION(
         sizeof(__m256), workspace_vector_count * sizeof(__m256)
     );
     
