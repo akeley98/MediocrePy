@@ -92,10 +92,10 @@ static inline struct ClipBoundsM256 get_new_clip_bounds(
     // sum of the squared deviations. We will do this in double rather
     // than single precision since we will be adding up a lot of
     // large numbers, and we want to minimize rounding error.
-    // (Trust me, this was in single precision before I rewrote
-    // it using double precision; float wasn't good enough -_-).
     // TODO consider whether Kahan summation w/ single precision
     // might be faster and/or more precise than naive double summation.
+    // (Trust me, this was in single precision before I rewrote
+    // it using double precision; float wasn't good enough -_-).
     const __m256 zero = _mm256_setzero_ps();
     __m256d lo_ss = _mm256_setzero_pd();
     __m256d hi_ss = _mm256_setzero_pd();

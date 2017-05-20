@@ -6,19 +6,70 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "median.h"
+#include "mediocre.h"
 #include "testing.h"
+
+static void u16_input_loop(
+    MediocreInputControl* control,
+    void const* user_data,
+    MediocreDimension dimension
+) {
+    MediocreInputCommand command;
+    uint16_t const* const* input_pointers = (uint16_t const* const*)user_data;
+    
+    (void)dimension;
+    
+    MEDIOCRE_INPUT_LOOP(command, control) {
+        __m256* chunks = command.output_chunks;
+        const size_t offset = command.offset;
+        size_t array_count = command.dimension.combine_count;
+        size_t width = command.dimension.width;
+        
+        for (size_t array_i = 0; array_i != array_count; ++array_i) {
+            uint16_t const* offset_array = input_pointers[array_i] + offset;
+            
+            for (size_t n = 0; n != width; ++n) {
+                float* p = mediocre_chunk_ptr(chunks, array_count, array_i, n);
+                
+                *p = (float)offset_array[n];
+            }
+        }
+    }
+}
+
+static void no_op(void* ignored) {
+    (void)ignored;
+}
+
+static MediocreInput u16_input(
+    uint16_t const* const* input_pointers,
+    size_t combine_count,
+    size_t width
+) {
+    MediocreInput result;
+    
+    result.loop_function = u16_input_loop;
+    result.destructor = no_op;
+    result.user_data = input_pointers;
+    result.dimension.combine_count = combine_count;
+    result.dimension.width = width;
+    result.nonzero_error = 0;
+    
+    return result;
+}
 
 static struct Random* generator;
 static struct timeb timer_begin;
 
+static const size_t test_count = 8;
 static const size_t max_offset = 15;           // Array can be offset to test
-static const size_t min_array_count = 1;       // for alignment bugs.
-static const size_t max_array_count = 400;
+static const size_t min_array_count = 50;      // for alignment bugs.
+static const size_t max_array_count = 250;
 static const size_t min_bin_count = 400000;
-static const size_t max_bin_count = 500000;
+static const size_t max_bin_count = 450000;
 static const uint32_t min_max_iter = 0;
-static const uint32_t max_max_iter = 15;
+static const uint32_t max_max_iter = 5;
+static const uint32_t max_threads = 12;
 
 static uint16_t input_data[(max_array_count * max_bin_count) + max_offset + 1];
 
@@ -68,11 +119,6 @@ static void test_median(
     double sigma_upper,
     size_t max_iter
 ) {
-    printf("Seed = %llu\n", (unsigned long long)get_seed(generator));
-    printf("\tMedian of %zi arrays of %zi integers.\n", array_count, bin_count);
-    printf("\tinput offset %zi output offset %zi.\n", offset0, offset1);
-    printf("sigma[-%f, %f] max_iter %zi\n", sigma_lower, sigma_upper, max_iter);
-    
     assert(min_array_count <= array_count && array_count <= max_array_count);
     assert(min_bin_count <= bin_count && bin_count <= max_bin_count);
     assert(offset0 <= max_offset);
@@ -102,9 +148,9 @@ static void test_median(
     
     // The output pointer will also be on a canary page.
     init_canary_page(
-        &output_page, sizeof(uint16_t) * bin_count, offset1 * sizeof(uint16_t)
+        &output_page, sizeof(float) * bin_count, offset1 * sizeof(float)
     );
-    uint16_t* output_pointer = output_page.ptr;    
+    float* output_pointer = output_page.ptr;    
     
     // Randomize the data in each input array.
     const uint32_t base = random_dist_u32(generator, 0, 3071);
@@ -113,11 +159,25 @@ static void test_median(
     }
     
     // Test the clipped median function.
+    int thread_count = (int)random_dist_u32(generator, 1, max_threads);    
+    
+    printf("Seed = %llu\n", (unsigned long long)get_seed(generator));
+    printf("\tMedian of %zi arrays of %zi integers.\n", array_count, bin_count);
+    printf("\tinput offset %zi output offset %zi.\n", offset0, offset1);
+    printf("sigma[-%f, %f] max_iter %zi\n", sigma_lower, sigma_upper, max_iter);
+    printf("thread_count = %i\n", thread_count);
+    
+    uint16_t const* const* input_pointers2 = 
+        (uint16_t const* const*)input_pointers;
+    
     ftime(&timer_begin);
-    int status = mediocre_clipped_median_mu16(
-        output_pointer, input_pointers, array_count, bin_count,
-        sigma_lower, sigma_upper, max_iter
+    int status = mediocre_combine_destroy(
+        output_pointer,
+        u16_input(input_pointers2, array_count, bin_count),
+        mediocre_clipped_median_functor2(sigma_lower, sigma_upper, max_iter),
+        thread_count
     );
+    
     printf("\33[32m\33[1mmedian:       ");
     print_timer_elapsed(timer_begin, array_count * bin_count);
     printf("\33[0m\n");
@@ -129,7 +189,10 @@ static void test_median(
     
     static float sorted[max_array_count];
     
-    for (size_t b = 0; b < bin_count; ++b) {
+    size_t b = bin_count;
+    do {
+        --b;
+        
         for (size_t a = 0; a < array_count; ++a) {
             sorted[a] = (float)input_pointers[a][b];
         }
@@ -170,16 +233,15 @@ static void test_median(
                 sorted[current_count / 2] + sorted[(current_count-1) / 2]
             );
         }
-        uint16_t median_u16 = (uint16_t)nearbyintf(median);
-        if (median_u16 != output_pointer[b]) {
-            printf("[%zi] %u != %u\n[", b, median_u16, output_pointer[b]);
+        if (median != output_pointer[b]) {
+            printf("[%zi] %f != %f\n[", b, median, output_pointer[b]);
             for (size_t a = 0; a < array_count; ++a) {
                 printf("%u,", input_pointers[a][b]);
             }
             printf(" ]\n");
             exit(1);
         }
-    }
+    } while (b != 0);
     
     if (check_canary_page(output_page) != 0) {
         printf("Output buffer overrun.\n");
@@ -193,7 +255,7 @@ static void test_median(
 int main() {
     generator = new_random();
     
-    for (size_t i = 0; i < 60; ++i) {
+    for (size_t i = 0; i < test_count; ++i) {
         size_t array_count = random_dist_u32(
             generator, min_array_count, max_array_count
         );

@@ -13,20 +13,16 @@ LinkTest = clang++ -lpthread
 bin/MediocrePy.so: bin/MediocrePy.s bin/convert.s bin/loaderthread.s bin/mean.s bin/median.s bin/strideloader.s
 	$(LinkLib) bin/MediocrePy.s bin/convert.s bin/loaderthread.s bin/mean.s bin/median.s bin/strideloader.s -o bin/MediocrePy.so
 
-bin/mediocre.so: bin/convert.s bin/loaderthread.s bin/mean.s bin/median.s
-	$(LinkLib) bin/convert.s bin/loaderthread.s bin/mean.s bin/median.s -o bin/mediocre.so
-
-# I want to throw away the convert.c code away so badly.
-bin/convert.s: src/convert.c include/convert.h
-	$(CC4) src/convert.c -o bin/convert.s
+bin/mediocre.so: bin/combine.s bin/mean.s bin/median.s
+	$(LinkLib) bin/combine.s bin/mean.s bin/median.s -o bin/mediocre.so
 	
-bin/loaderthread.s: src/loaderthread.c include/loaderfunction.h src/inline/loaderthread.h
-	$(CC) src/loaderthread.c -o bin/loaderthread.s
+bin/combine.s: src/combine.c include/mediocre.h
+	$(CC) src/combine.c -o bin/combine.s
 
-bin/mean.s: src/mean.c include/mean.h include/convert.h include/loaderfunction.h src/inline/loaderthread.h src/inline/sigmautil.h
+bin/mean.s: src/mean.c include/mediocre.h src/inline/sigmautil.h
 	$(CC4) src/mean.c -o bin/mean.s
 	
-bin/median.s: src/median.c include/median.h include/convert.h include/loaderfunction.h src/inline/loaderthread.h src/inline/sigmautil.h
+bin/median.s: src/median.c include/mediocre.h src/inline/sigmautil.h
 	$(CC4) src/median.c -o bin/median.s
 	
 bin/MediocrePy.s: src/MediocrePy.c include/loaderfunction.h include/mean.h include/median.h src/inline/strideloader.h
@@ -37,23 +33,17 @@ bin/strideloader.s: src/strideloader.c src/inline/strideloader.h include/loaderf
 
 bin/testing.s: src/testing.cc
 	$(Cxx) src/testing.cc -o bin/testing.s
-	
-tests/bin/convert_test.s: tests/convert_test.c include/convert.h src/inline/testing.h
-	$(CC) tests/convert_test.c -o tests/bin/convert_test.s
 
-tests/bin/convert_test: bin/testing.s bin/convert.s tests/bin/convert_test.s
-	$(LinkTest) bin/testing.s bin/convert.s tests/bin/convert_test.s -o tests/bin/convert_test
-
-tests/bin/mean_test.s: tests/mean_test.c include/mean.h src/inline/testing.h
+tests/bin/mean_test.s: tests/mean_test.c include/mediocre.h src/inline/testing.h
 	$(CC) tests/mean_test.c -o tests/bin/mean_test.s
 	
-tests/bin/median_test.s: tests/median_test.c include/median.h src/inline/testing.h
+tests/bin/median_test.s: tests/median_test.c include/mediocre.h src/inline/testing.h
 	$(CC) tests/median_test.c -o tests/bin/median_test.s
 
-tests/bin/mean_test: bin/testing.s bin/convert.s bin/mean.s tests/bin/mean_test.s bin/loaderthread.s
-	$(LinkTest) bin/testing.s bin/convert.s bin/mean.s tests/bin/mean_test.s bin/loaderthread.s -o tests/bin/mean_test
+tests/bin/mean_test: tests/bin/mean_test.s bin/combine.s bin/mean.s bin/testing.s
+	$(LinkTest) tests/bin/mean_test.s bin/combine.s bin/mean.s bin/testing.s -o tests/bin/mean_test
 	
-tests/bin/median_test: bin/testing.s bin/convert.s bin/median.s tests/bin/median_test.s bin/loaderthread.s
-	$(LinkTest) bin/testing.s bin/convert.s bin/median.s tests/bin/median_test.s bin/loaderthread.s -o tests/bin/median_test
+tests/bin/median_test: tests/bin/median_test.s bin/combine.s bin/median.s bin/testing.s
+	$(LinkTest) tests/bin/median_test.s bin/combine.s bin/median.s bin/testing.s -o tests/bin/median_test
 	
 	

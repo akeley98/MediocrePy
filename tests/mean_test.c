@@ -22,8 +22,57 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "mean.h"
+#include "mediocre.h"
 #include "testing.h"
+
+static void u16_input_loop(
+    MediocreInputControl* control,
+    void const* user_data,
+    MediocreDimension dimension
+) {
+    MediocreInputCommand command;
+    uint16_t const* const* input_pointers = (uint16_t const* const*)user_data;
+    
+    (void)dimension;
+    
+    MEDIOCRE_INPUT_LOOP(command, control) {
+        __m256* chunks = command.output_chunks;
+        const size_t offset = command.offset;
+        size_t array_count = command.dimension.combine_count;
+        size_t width = command.dimension.width;
+        
+        for (size_t array_i = 0; array_i != array_count; ++array_i) {
+            uint16_t const* offset_array = input_pointers[array_i] + offset;
+            
+            for (size_t n = 0; n != width; ++n) {
+                float* p = mediocre_chunk_ptr(chunks, array_count, array_i, n);
+                
+                *p = (float)offset_array[n];
+            }
+        }
+    }
+}
+
+static void no_op(void* ignored) {
+    (void)ignored;
+}
+
+static MediocreInput u16_input(
+    uint16_t const* const* input_pointers,
+    size_t combine_count,
+    size_t width
+) {
+    MediocreInput result;
+    
+    result.loop_function = u16_input_loop;
+    result.destructor = no_op;
+    result.user_data = input_pointers;
+    result.dimension.combine_count = combine_count;
+    result.dimension.width = width;
+    result.nonzero_error = 0;
+    
+    return result;
+}
 
 static struct Random* generator;
 static struct timeb timer_begin;
@@ -31,8 +80,8 @@ static struct timeb timer_begin;
 static const size_t max_offset = 15;           // Array can be offset to test
 static const size_t min_array_count =   1;     // for alignment bugs.
 static const size_t max_array_count = 500;
-static const size_t min_bin_count = 250000;
-static const size_t max_bin_count = 300000;
+static const size_t min_bin_count = 750000;
+static const size_t max_bin_count = 900000;
 static const uint32_t min_max_iter = 0;
 static const uint32_t max_max_iter = 15;
 
@@ -117,9 +166,9 @@ static void test_mean(
     
     // The output pointer will also be on a canary page.
     init_canary_page(
-        &output_page, sizeof(uint16_t) * bin_count, offset1 * sizeof(uint16_t)
+        &output_page, sizeof(float) * bin_count, offset1 * sizeof(float)
     );
-    uint16_t* output_pointer = output_page.ptr;    
+    float* output_pointer = output_page.ptr;    
     
     // Randomize the data in each input array.
     const uint32_t base = random_dist_u32(generator, 0, 3071);
@@ -127,23 +176,37 @@ static void test_mean(
         random_fill(input_pointers[i], bin_count, base);
     }
     
+    int thread_count = (int)random_dist_u32(generator, 1, 16);
+    
     // Now test the clipped mean function.
     printf("sigma[-%f, %f] max_iter %zi\n", sigma_lower, sigma_upper, max_iter);
+    printf("thread_count = %i\n", thread_count);
     ftime(&timer_begin);
-    int status = mediocre_clipped_mean_mu16(
-        output_pointer, input_pointers, array_count, bin_count,
-        sigma_lower, sigma_upper, max_iter
+    
+    
+    
+    int status = mediocre_combine_destroy(
+        output_pointer,
+        u16_input(
+            (uint16_t const* const*)input_pointers,
+            array_count,
+            bin_count),
+        mediocre_clipped_mean_functor2(sigma_lower, sigma_upper, max_iter),
+        thread_count
     );
+    
     printf("\33[36m\33[1mclipped mean: ");
     print_timer_elapsed(timer_begin, array_count * bin_count);
     printf("\33[0m\n");
     
-    if (status < 0) {
+    if (status != 0) {
         perror("mediocre_clipped_mean_u16 failed");
         exit(1);
     }
     
-    for (size_t i = 0; i < bin_count; ++i) {
+    size_t i = bin_count;
+    do {
+        --i;
         float lower_bound = 0.0f, upper_bound = 65536.0f, clipped_mean;
         for (size_t it = 0; it != max_iter + 1; ++it) {
             float sum = 0.0f, count = 0.0f;
@@ -170,16 +233,15 @@ static void test_mean(
             lower_bound = (new_lb < lower_bound) ? lower_bound : new_lb;
             upper_bound = (new_ub > upper_bound) ? upper_bound : new_ub;
         }
-        uint16_t result = (uint16_t)nearbyintf(clipped_mean);
-        if (result != output_pointer[i]) {
-            printf("[%zi] %u != %u\n[", i, result, output_pointer[i]);
+        if (clipped_mean != output_pointer[i]) {
+            printf("[%zi] %f != %f\n[", i, clipped_mean, output_pointer[i]);
             for (size_t a = 0; a < array_count; ++a) {
                 printf(" %u", input_pointers[a][i]);
             }
             printf(" ]\n");
             exit(1);
         }
-    }
+    } while (i != 0);
     
     if(check_canary_page(output_page) < 0) {
         printf("Output buffer overrun.\n");
@@ -191,7 +253,7 @@ static void test_mean(
 }
 
 int main() {
-    generator = new_random();
+    generator = new_random1(394033218);
     
     for (size_t i = 0; i < 24; ++i) {
         size_t array_count = random_dist_u32(

@@ -15,20 +15,19 @@
  *  along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "median.h"
-
 #include <assert.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <immintrin.h>
 #include <emmintrin.h>
 
-#include "convert.h"
-#include "loaderfunction.h"
-#include "loaderthread.h"
+#include "mediocre.h"
 #include "sigmautil.h"
+
+static const size_t max_combine_count = 1000000;
 
 /*  Sort the numbers within the 8 lanes of the to_sort array[0 ...  count-1]
  *  of vectors passed in. If it makes more sense, think of it like calling a
@@ -43,7 +42,6 @@ static void mergesort_m256(__m256* to_sort, size_t count, __m256* scratch);
 /*  Function for checking merge precondition: all 8 lanes in  the  array  of
  *  vector_count vectors must have their floats in ascending order.
  */
-
 static int is_sorted_m256(__m256 const* in, size_t vector_count) {
     __m256 bits = _mm256_setzero_ps();
     __m256 previous = in[0];
@@ -56,30 +54,43 @@ static int is_sorted_m256(__m256 const* in, size_t vector_count) {
 }
 
 /*  Calculate the sigma clipped median of groups of floating  point  numbers
- *  with lower and upper sigma bounds passed as specified below.
+ *  with  lower  and upper sigma bounds passed as specified below. Here, the
+ *  sigma  clipped  median  of  a  group  of  numbers  is  defined  as  this
+ *  algorithm:
+ *   1. Find the median of the group of numbers
+ *   2. Calculate a value akin to the standard deviation (S) by inputting
+ *      the median instead of the mean in the step where the sum of the squared
+ *      deviations is calculated in the standard deviation algorithm.
+ *   3. Remove all numbers outside the range
+ *      [median - sigma_lower * S, median + sigma_upper * S]
+ *   4. Repeat with the new group of numbers at (1) until we reach the maximum
+ *      number of iterations allowed.
+ *   5. Return the median of the remaining numbers.
  *  
- *  Each group of numbers is passed to the function  as  a  lane  of  floats
- *  within an array[0 ... group_size - 1] of __m256 vectors. Since there are
- *  8 lanes within an __m256 vector, 8 groups are passed within  one  array.
- *  These  arrays  are  passed as subarrays[0 ... group_size - 1] within the
- *  in2D array. The in2D array will be used as temporary storage within this
- *  function,  and  will  have  unspecified  value  upon return. The clipped
- *  median of each lane of floats is written to the out array.  Interpreting
- *  the pointers as pointers to float instead of to__m256,
+ *  Each column of numbers to be combined is passed to  the  function  as  a
+ *  lane  of  floats  within  an  array[0  ...  combine_count - 1] of __m256
+ *  vectors, often referred to as a chunk. Since there are 8 lanes within an
+ *  __m256  vector,  8 columns are passed within one chunk. These chunks are
+ *  passed as subarrays[0 ... combine_count - 1] within the in2D array,  and
+ *  there  are chunk_count of them. The in2D array will be used as temporary
+ *  storage within this function,  and  will  have  unspecified  value  upon
+ *  return.  The clipped median of each lane of floats is written to the out
+ *  array. Interpreting  the  pointers  as  pointers  to  float  instead  of
+ *  to__m256,
  *      out[8x + y]
  *  corresponds to the clipped median of every 8th float in the range
- *      in2D[8*x*group_size + y ... 8*(x+1)*group_size + y - 8]
+ *      in2D[8*x*combine_count + y ... 8*(x+1)*combine_count + y - 8]
  *  (see example below)
  *  
  *    ** out
- *  array [0 ... subarray_count - 1] of __m256
+ *  array [0 ... chunk_count - 1] of __m256
  *    ** in2D
- *  array [0 ... subarray_count * group_size - 1] of __m256
+ *  array [0 ... chunk_count * combine_count - 1] of __m256
  *  in2D's CONTENTS WILL HAVE UNSPECIFIED VALUE AFTER THE FUNCTION RETURNS.
- *    ** group_size
- *  count of the number of floats that are clipped into a single output
- *    ** subarray_count
- *  number of groups, divided by 8.
+ *    ** combine_count
+ *  count of the number of floats that are combined into a single output
+ *    ** chunk_count
+ *  number of columns to be combined, divided by 8.
  *    ** sigma_lower
  *  lower bound (in standard deviations) for the sigma clipping passed as  a
  *  vector of 4 identical positive doubles.
@@ -89,12 +100,13 @@ static int is_sorted_m256(__m256 const* in, size_t vector_count) {
  *    ** max_iter
  *  maximum number of iterations of sigma clipping to be performed.
  *    ** scratch
- *  array [0 ... group_size - 1] of __m256 (for temporary storage).
+ *  array [0 ... combine_count - 1] of  __m256  (for  temporary  storage  in
+ *  sorting a chunk of 8 columns of numbers).
  *  
- *  Example memory layout for group_size = 4, subarray_count = 3 (3 * 8 = 24
- *  groups of 4 floats total). Each of the 4 numbers stored in in2D labelled
- *  with the same character has their clipped median output  to  the  number
- *  with the same label in out.
+ *  Example memory layout for combine_count = 4, chunk_count = 3 (3 * 8 = 24
+ *  columns  of  4  floats  total).  Each  of  the  4 numbers stored in in2D
+ *  labelled with the same character has their clipped median output to  the
+ *  number with the same label in out.
  *  
  *      out+0:  0 1 2 3 4 5 6 7  8 9 A B C D E F
  *      +64:    G H I J K L M N
@@ -109,34 +121,34 @@ static int is_sorted_m256(__m256 const* in, size_t vector_count) {
 static inline void clipped_median_chunk_m256(
     __m256* out,
     __m256* in2D,
-    size_t group_size,
-    size_t subarray_count,
+    size_t combine_count,
+    size_t chunk_count,
     __m256d sigma_lower,
     __m256d sigma_upper,
     size_t max_iter,
     __m256* scratch
 ) {
-    assert(subarray_count >= 1);
-    assert(group_size >= 1);
-    assert(group_size <= 0x7FFFF0);
+    assert(chunk_count >= 1);
+    assert(combine_count >= 1);
+    assert(combine_count <= max_combine_count);
     
     const __m256 zero = _mm256_setzero_ps();
     const __m256 half = _mm256_set1_ps(0.5f);
     const __m256 one  = _mm256_set1_ps(1.0f);
     
     // More about this later.
-    const __m256 initial_counter = _mm256_set1_ps(group_size * 0.5f + 1.0f);
+    const __m256 initial_counter = _mm256_set1_ps(combine_count * 0.5f + 1.0f);
     
-    for (size_t g = 0; g < subarray_count; ++g) {
-        __m256* subarray = in2D + g * group_size;
+    for (size_t g = 0; g < chunk_count; ++g) {
+        __m256* chunk = in2D + g * combine_count;
         
-        // We will sort the subarray and work with only the sorted numbers.
+        // We will sort the chunk and work with only the sorted numbers.
         // Selection algorithm is neat but not easy to paralellize, so we sort.
-        mergesort_m256(subarray, group_size, scratch);
-        assert(is_sorted_m256(subarray, group_size));
+        mergesort_m256(chunk, combine_count, scratch);
+        assert(is_sorted_m256(chunk, combine_count));
         
         // The count of numbers in each lane that are within the clipping range.
-        __m256 clipped_count = _mm256_set1_ps((float)group_size);
+        __m256 clipped_count = _mm256_set1_ps((float)combine_count);
         
         // That same quantity in the previous iteration. If the counts for the
         // previous iteration of sigma clipping are the same as the counts for
@@ -145,55 +157,54 @@ static inline void clipped_median_chunk_m256(
         
         // Calculate the median of all of the numbers.
         __m256 clipped_median = _mm256_add_ps(
-            _mm256_mul_ps(half, subarray[(group_size-1)/2]),
-            _mm256_mul_ps(half, subarray[group_size/2])
+            _mm256_mul_ps(half, chunk[(combine_count-1)/2]),
+            _mm256_mul_ps(half, chunk[combine_count/2])
         );
         
         struct ClipBoundsM256 bounds = {
             _mm256_set1_ps(-1.f/0.f), _mm256_set1_ps(1.f/0.f)
         };        
-      /*  In each iteration, calculate the median of the  numbers  within  the
-       *  recalculated  clipping  bounds.  The  amazing, enigmatic, terrifying
-       *  counter variable has a lot to do with this recalculation.
-       *  
-       *  Each lane of the counter  variable  indirectly  encodes  information
-       *  about  where  the  median  of  the  in-range  numbers  is within the
-       *  corresponding lane of the sorted list of all numbers. In the  second
-       *  loop,  where  we iterate backwards through the subarray, the counter
-       *  variable sort of stores the remaining distance (plus half)  to  each
-       *  median  in  each  lane,  assuming  that  none  of the numbers in the
-       *  subarray are above the clipping range. Each iteration the  lanes  of
-       *  the  counter are decremented by one because in each iteration we get
-       *  one unit closer to the median. If a lane of the counter is one-half,
-       *  then  we reached the correct median position for an odd-length list,
-       *  and we store the number at that position as the  new  median.  If  a
-       *  lane of the counter is one or zero, then we are a half-unit above or
-       *  below the median's position, and we store half  of  each  position's
-       *  value  such  that  the sum of those values is the median (average of
-       *  the numbers on the two sides of the median position).
-       *  
-       *  Of course, the assumption that all of the numbers we  visit  in  the
-       *  backwards  iteration will be in bounds is false (more precisely, the
-       *  assumption that none will be above the upper bound is false). So, if
-       *  the  number at the position being visited in the backwards iteration
-       *  is out-of-range, we decrement the corresponding lane of the  counter
-       *  by only a half instead of one, since although we got one unit closer
-       *  to the median, we also discover that  the  actual  position  of  the
-       *  median  is  one-half of a unit farther away than we assumed (because
-       *  the size of the list of in-bounds numbers shrank by one).
-       *  
-       *  To set up the counter, we assume that the median  is  at  the  exact
-       *  halfway point of the subarray, initializing the value of the counter
-       *  to  one  plus  half  of  the  length  of  the  subarray  using   the
-       *  initial_counter  variable,  then iterate forwards from the beginning
-       *  and decrement by half each time we see a number that  is  below  the
-       *  clipping  range  (indicating  that  the  position of the median is a
-       *  half-unit closer to the end of the subarray than we had assumed).
-       */
+/*  In each iteration, calculate  the  median  of  the  numbers  within  the
+ *  recalculated clipping bounds. The amazing, enigmatic, terrifying counter
+ *  variable has a lot to do with this recalculation.
+ *  
+ *  Each lane of the counter variable indirectly encodes  information  about
+ *  where  the  median  of  the in-range numbers is within the corresponding
+ *  lane of the sorted list of all numbers. In the  second  loop,  where  we
+ *  iterate backwards through the chunk, the counter variable sort of stores
+ *  the remaining distance (plus half) to each median in each lane, assuming
+ *  that none of the numbers in the chunk are above the clipping range. Each
+ *  iteration the lanes of the counter are decremented  by  one  because  in
+ *  each  iteration  we  get one unit closer to the median. If a lane of the
+ *  counter is one-half, then we reached the correct median position for  an
+ *  odd-length  list,  and  we  store the number at that position as the new
+ *  median. If a lane of the counter is one or zero, then we are a half-unit
+ *  above  or  below  the  median's  position,  and  we  store  half of each
+ *  position's value such that  the  sum  of  those  values  is  the  median
+ *  (average of the numbers on the two sides of the median position).
+ *  
+ *  Of course, the assumption that all  of  the  numbers  we  visit  in  the
+ *  backwards  iteration  will  be  in  bounds is false (more precisely, the
+ *  assumption that none will be above the upper bound is false). So, if the
+ *  number  at  the  position  being  visited  in the backwards iteration is
+ *  out-of-range, we decrement the corresponding lane of the counter by only
+ *  a  half  instead  of  one,  since although we got one unit closer to the
+ *  median, we also discover that the  actual  position  of  the  median  is
+ *  one-half of a unit farther away than we assumed (because the size of the
+ *  list of in-bounds numbers shrank by one).
+ *  
+ *  To set up the counter, we assume that the median is at the exact halfway
+ *  point  of  the chunk , initializing the value of the counter to one plus
+ *  half of the length of the chunk using the initial_counter variable, then
+ *  iterate  forwards  from the beginning and decrement by half each time we
+ *  see a number that is below  the  clipping  range  (indicating  that  the
+ *  position  of the median is a half-unit closer to the end of the subarray
+ *  than we had assumed).
+ */
         for (size_t iter = 0; iter != max_iter; ++iter) {
             bounds = get_new_clip_bounds(
-                subarray,               // data
-                group_size,             // vector_count
+                chunk,                  // data
+                combine_count,          // vector_count
                 bounds,                 // bounds
                 clipped_median,         // center
                 clipped_count,          // clipped_count
@@ -202,14 +213,14 @@ static inline void clipped_median_chunk_m256(
             );
             
             __m256 counter = initial_counter;
-            clipped_count = _mm256_set1_ps((float)group_size);
+            clipped_count = _mm256_set1_ps((float)combine_count);
             
             size_t i = 0, not_finished = 1;
             
             // Forwards iteration loop. Exit once none of the numbers in any
             // of the lanes are below the lower bound of the clipping range.
-            while (not_finished && i < group_size) {
-                __m256 tmp = subarray[i++];
+            while (not_finished && i < combine_count) {
+                __m256 tmp = chunk[i++];
                 tmp = _mm256_cmp_ps(tmp, bounds.lower, _CMP_LT_OQ);
                 not_finished = _mm256_movemask_ps(tmp);
                 
@@ -222,11 +233,11 @@ static inline void clipped_median_chunk_m256(
             
             // Backwards iteration loop. Exit once all of the medians (or the
             // 2 half-terms of a median of an even length list) are collected.
-            i = group_size;
+            i = combine_count;
             clipped_median = _mm256_setzero_ps();
             int clipped_count_changed;
             do {
-                __m256 const data = subarray[--i];
+                __m256 const data = chunk[--i];
                 __m256 mask = _mm256_cmp_ps(data, bounds.upper, _CMP_GT_OQ);
                 
                 counter = _mm256_sub_ps(counter,
@@ -268,64 +279,130 @@ static inline void clipped_median_chunk_m256(
         }
         out[g] = clipped_median;
     }
+}
+
+struct arguments {
+    double sigma_lower;
+    double sigma_upper;
+    size_t max_iter;
+};
+
+static void loop_function(
+    MediocreFunctorControl* control,
+    void const* user_data,
+    MediocreDimension maximum_request
+) {
+    struct arguments* arguments_ptr = (struct arguments*)user_data;
     
-    // Overwrite the input array in debug mode to emphasize the point
-    // that they are consumed as temporary storage by the function.
-    assert(memset(in2D, 42, sizeof(__m256) * group_size * subarray_count));
-}
-
-static int u16_loader(struct MediocreLoaderArg arg) {
-    uint16_t const* const* arrays = (uint16_t const* const*)arg.input.arrays;
-    for (size_t a = 0; a < arg.input.array_count; ++a) {
-        load_m256_from_u16_stride(
-            arg.command.output + a,
-            arrays[a] + arg.command.start_index,
-            arg.command.length,
-            arg.input.array_count
-        );
+    const __m256d sigma_lower = _mm256_set1_pd(arguments_ptr->sigma_lower);
+    const __m256d sigma_upper = _mm256_set1_pd(arguments_ptr->sigma_upper);
+    const size_t max_iter = arguments_ptr->max_iter;
+    
+    void* scratch_pv;
+    int status = posix_memalign(
+        &scratch_pv,
+        sizeof(__m256),
+        maximum_request.combine_count * sizeof(__m256)
+    );
+    
+    if (status != 0) {
+        perror("mediocre_clipped_median_functor could not allocate memory");
+        mediocre_functor_error(control, status);
     }
-    return 0;
+    
+    __m256* scratch = (__m256*)scratch_pv;
+    MediocreFunctorCommand command;
+    
+    MEDIOCRE_FUNCTOR_LOOP(command, control) {
+        // Divide the requested width by 8 (rounded up) to get the chunk count.
+        size_t chunk_count = (command.dimension.width + 7) / 8;
+        
+        __m256* temp_output = mediocre_functor_aligned_temp(command, control);
+        
+        if (temp_output == NULL) {
+            perror("mediocre_clipped_median_functor\n"
+                "could not allocated temp_output");
+            mediocre_functor_error(control, errno);
+        } else if (command.dimension.combine_count > max_combine_count) {
+            fprintf(stderr, "mediocre_clipped_mean_functor\n"
+                "too many arrays to be combined [%zi > %zi]\n",
+                command.dimension.combine_count, max_combine_count
+            );
+            mediocre_functor_error(control, E2BIG);
+        } else {
+            clipped_median_chunk_m256(
+                temp_output,
+                command.input_chunks,
+                command.dimension.combine_count,
+                chunk_count,
+                sigma_lower,
+                sigma_upper,
+                max_iter,
+                scratch
+            );
+            
+            mediocre_functor_write_temp(command, temp_output);
+        }
+    }
+    
+    free(scratch);
 }
 
-int mediocre_clipped_median_u16(
-    uint16_t* out,
-    uint16_t const* const* data,
-    size_t array_count,
-    size_t bin_count,
-    double sigma_lower,
-    double sigma_upper, 
-    size_t max_iter
-) {
-    return combine_chunks(
-        out, 116,
-        (struct MediocreInputData){ data, array_count, bin_count, NULL },
-        u16_loader,
-        clipped_median_chunk_m256,
-        sigma_lower,
-        sigma_upper,
-        max_iter
-    );
+static void no_op(void* ignored) {
+    (void)ignored;
 }
 
-int mediocre_clipped_median(
-    void* out,
-    int output_type_code,
-    struct MediocreInputData input,
-    int (*loader_function)(struct MediocreLoaderArg),
-    double sigma_lower,
-    double sigma_upper,
-    size_t max_iter
+MediocreFunctor mediocre_median_functor() {
+    // The median functor will just be the clipped median functor set to run
+    // with zero iterations of sigma clipping.
+    static const struct arguments no_sigma_clipping = {
+        3.0, 3.0, 0
+    };
+    
+    MediocreFunctor result;
+    
+    result.loop_function = loop_function;
+    result.destructor = no_op;
+    result.user_data = &no_sigma_clipping;
+    result.nonzero_error = 0;
+    
+    return result;
+}
+
+MediocreFunctor mediocre_clipped_median_functor2(
+    double sigma_lower, double sigma_upper, size_t max_iter
 ) {
-    return combine_chunks(
-        out,
-        output_type_code,
-        input,
-        loader_function,
-        clipped_median_chunk_m256,
-        sigma_lower,
-        sigma_upper,
-        max_iter
-    );
+    MediocreFunctor result;
+    result.loop_function = loop_function;
+    result.destructor = free;
+    result.user_data = NULL;
+    
+    if (sigma_lower < 1.0) {
+        fprintf(stderr, "sigma_lower must be at least 1.\n");
+        result.nonzero_error = ERANGE;
+        return result;
+    } else if (sigma_upper < 1.0) {
+        fprintf(stderr, "sigma_upper must be at least 1.\n");
+        result.nonzero_error = ERANGE;
+        return result;
+    }
+    
+    struct arguments* args = (struct arguments*)malloc(sizeof *args);
+    
+    if (args == NULL) {
+        perror("mediocre_clipped_median_functor2");
+        result.nonzero_error = errno;
+        return result;
+    } else {
+        args->sigma_lower = sigma_lower;
+        args->sigma_upper = sigma_upper;
+        args->max_iter = max_iter;
+        
+        result.user_data = args;
+        result.nonzero_error = 0;
+        
+        return result;
+    }
 }
 
 /**************************************************************************
@@ -526,7 +603,8 @@ static void merge_m256(
         return;
     }
     // We will be using single-precision floats to represent the array
-    // index, so make sure it's small enough to fit with full precision.
+    // index, so make sure it's small enough to fit with full precision. Check
+    // that the high 8 bits are 0, because float has only 24 bits of precision.
     if ((l_size + r_size) & ~0xffffff) {
         fprintf(stderr, "mediocre internal error: merge_m256\n");
         abort();
@@ -549,8 +627,8 @@ static void merge_m256(
      *  new_index  variables  store the value and position of the new number
      *  being considered in an iteration. We take this  perspective  of  old
      *  and  new indexes rather than an index for one partition and an index
-     *  for the oher partition (as used by most merge algorithms) so that we
-     *  only  have  to reload new data from memory. The survivor will always
+     *  for the other partition (as used by most merge algorithms)  so  that
+     *  we only have to reload new data from memory. The survivor will always
      *  be known  and  can  be  reused  from  registers  from  the  previous
      *  iteration.
      *  
@@ -615,6 +693,10 @@ static void merge_m256(
         inc_new_index = _mm256_add_ps(one, new_index);
         
         // This part is slow :(
+        // NOTE: AVX2 introduces gather instructions. Maybe detect AVX2
+        // support one day and use that if possible. Also AVX2 has integer
+        // instructions so we can just do the index logic with integers
+        // instead of converting back-and-forth from floats.
         __m256i new_index_i = _mm256_cvtps_epi32(new_index);
         int32_t i0 = _mm256_extract_epi32(new_index_i, 0);
         int32_t i1 = _mm256_extract_epi32(new_index_i, 1);
