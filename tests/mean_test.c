@@ -25,7 +25,7 @@
 #include "mediocre.h"
 #include "testing.h"
 
-static void u16_input_loop(
+static int u16_input_loop(
     MediocreInputControl* control,
     void const* user_data,
     MediocreDimension dimension
@@ -51,6 +51,8 @@ static void u16_input_loop(
             }
         }
     }
+    
+    return 0;
 }
 
 static void no_op(void* ignored) {
@@ -79,11 +81,12 @@ static struct timeb timer_begin;
 
 static const size_t max_offset = 15;           // Array can be offset to test
 static const size_t min_array_count =   1;     // for alignment bugs.
-static const size_t max_array_count = 500;
-static const size_t min_bin_count = 750000;
-static const size_t max_bin_count = 900000;
+static const size_t max_array_count = 600;
+static const size_t min_bin_count = 1;
+static const size_t max_bin_count = 500000;
 static const uint32_t min_max_iter = 0;
 static const uint32_t max_max_iter = 15;
+static const int max_thread_count = 15;
 
 static uint16_t input_data[(max_array_count * max_bin_count) + max_offset + 1];
 
@@ -176,7 +179,7 @@ static void test_mean(
         random_fill(input_pointers[i], bin_count, base);
     }
     
-    int thread_count = (int)random_dist_u32(generator, 1, 16);
+    int thread_count = (int)random_dist_u32(generator, 1, max_thread_count);
     
     // Now test the clipped mean function.
     printf("sigma[-%f, %f] max_iter %zi\n", sigma_lower, sigma_upper, max_iter);
@@ -253,7 +256,7 @@ static void test_mean(
 }
 
 int main() {
-    generator = new_random1(394033218);
+    generator = new_random();
     
     for (size_t i = 0; i < 24; ++i) {
         size_t array_count = random_dist_u32(

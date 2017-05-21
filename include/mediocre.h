@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <immintrin.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 #ifdef __cplusplus
@@ -38,10 +39,10 @@ typedef struct mediocre_dimension {
 
 
 typedef struct mediocre_input {
-    void (*loop_function)(
+    int (*loop_function)(
         MediocreInputControl* control,
         void const* user_data,
-        MediocreDimension dimesion
+        MediocreDimension maximum_request
     );
     void (*destructor)(void* user_data);
     void const* user_data;          // Will be passed to the loop_function.
@@ -53,7 +54,7 @@ typedef struct mediocre_input {
 } MediocreInput;
 
 typedef struct mediocre_functor {
-    void (*loop_function)(
+    int (*loop_function)(
         MediocreFunctorControl* control,
         void const* user_data,
         MediocreDimension maximum_request
@@ -179,10 +180,9 @@ static inline int mediocre_combine2(
 }
 
 /*  Define structures and the function used by the mediocre library to  pass
- *  commands to user-supplied input loops and combine functor loops, and for
- *  the user to report failures to follow the commands back to the  mediocre
- *  library. These user-supplied loop functions underlie the behavior of the
- *  input and functor arguments to mediocre_combine.
+ *  commands  to  user-supplied input loops and combine functor loops. These
+ *  user-supplied loop functions underlie the  behavior  of  the  input  and
+ *  functor arguments to mediocre_combine.
  */
 typedef struct mediocre_input_command {
     size_t _exit;
@@ -192,8 +192,6 @@ typedef struct mediocre_input_command {
 } MediocreInputCommand;
 
 MediocreInputCommand mediocre_input_control_get(MediocreInputControl*);
-
-void mediocre_input_error(MediocreInputControl*, int error_code);
 
 #define MEDIOCRE_INPUT_LOOP(command, control) \
 for (command = mediocre_input_control_get(control); \
@@ -210,12 +208,11 @@ typedef struct mediocre_functor_command {
     float* output;        // The portion of the array that the caller of
                           // mediocre_combine passed that should hold the
                           // combine output currently requested. Might NOT
-                          // be aligned to a 32 byte boundary.
+                          // be aligned to a 32 byte boundary. See
+                          // mediocre_functor_aligned_temp.
 } MediocreFunctorCommand;
 
 MediocreFunctorCommand mediocre_functor_control_get(MediocreFunctorControl*);
-
-void mediocre_functor_error(MediocreFunctorControl*, int error_code);
 
 #define MEDIOCRE_FUNCTOR_LOOP(command, control) \
 for (command = mediocre_functor_control_get(control); \
@@ -231,19 +228,24 @@ for (command = mediocre_functor_control_get(control); \
  *  be divisible by 4 or 8. This library provides these helper functions  to
  *  assist implementors of vectorized combine functors.
  *  
- *  Call mediocre_functor_aligned_temp to obtain  32  byte  aligned  storage
- *  that  is  large  enough  to  hold  8  * ceil(width / 8) floats (so it is
- *  guaranteed to be safe to write all output using __m256 pointers even  if
- *  the requested output width is not a multiple of 8). The function returns
- *  NULL (and sets errno) if there is an error. After writing the output (in
- *  the  format  of a flat array of floats, just as the final output through
- *  the command.output pointer is), call mediocre_functor_write_temp to move
- *  the data to the output pointer.
+ *  Call mediocre_functor_aligned_temp with the command  just  received  and
+ *  the  pointer  to the functor control struct for this thread to obtain 32
+ *  byte aligned storage that is large enough to hold 8 *  ceil(width  /  8)
+ *  floats  (so it is guaranteed to be safe to write all output using __m256
+ *  pointers even if the requested output width is not a multiple of 8). The
+ *  function  returns  NULL  (and  sets  errno)  if there is an error. After
+ *  writing the output (in the format of a flat array of floats, just as the
+ *  final    output   through   the   command.output   pointer   is),   call
+ *  mediocre_functor_write_temp to move the data to the output pointer.
  *  
  *  Combine functor implementors are by  no  means  required  to  use  these
  *  functions: they may write through the output pointer directly as long as
  *  they are careful not to assume alignment and to not write past  the  end
  *  of the array.
+ *  
+ *  Note that the pointer returned by this function  may  match  the  output
+ *  pointer  specified  by the command if the output pointer already matches
+ *  the requirements for the return pointer guaranteed by this function.
  */
 __m256* mediocre_functor_aligned_temp(
     MediocreFunctorCommand, MediocreFunctorControl*
@@ -321,6 +323,20 @@ static inline MediocreFunctor mediocre_clipped_median_functor(
 ) {
     return mediocre_clipped_median_functor2(sigma, sigma, max_iter);
 }
+
+
+typedef struct mediocre_2D {
+    void const* data;
+    uintptr_t type_code;
+    uintptr_t major_width;
+    uintptr_t major_stride;
+    uintptr_t minor_width;
+    uintptr_t minor_stride;
+} Mediocre2D;
+
+typedef struct mediocre_masked_2D {
+    Mediocre2D data_2D, mask_2D;
+} MediocreMasked2D;
 
 #ifdef __cplusplus
 } // end extern "C"

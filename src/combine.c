@@ -15,8 +15,8 @@
 // The convenience typedefs MediocreInputControl and MediocreFunctorControl
 // are already in-scope since mediocre.h was included. The control structures
 // are all accessed by the user as opaque pointers to allow us to redesign
-// the iteration scheme without forcing users to recompile the code. In
-// particular, notice how semaphors are used all over the place in the code.
+// the iteration scheme without forcing users to recompile their code.
+// Notice how semaphors are used all over the place in the code.
 // Since there is only one-way flow of data (input data to input_thread_buffer
 // chunks and commands to functor threads to output buffer), there may be more
 // efficient ways to redesign this using relaxed memory models.
@@ -26,7 +26,8 @@ struct functor_buffer {
     // Variables used to pass commands to combine functors.
     MediocreDimension command_dimension;
     float* command_output; // Null to request thread exit.
-    int nonzero_error;     // Functor sets to nonzero to report error.
+    
+    int nonzero_error;
     
     // The compiler better align this array properly or I WILL FSCKING KILL
     // EVERYONE!!!!1!1!!!!!11!!!!1!1!!!!11!!1!!!!one!
@@ -53,13 +54,24 @@ struct functor_buffer {
  *  semaphor. This way neither thread proceeds until the other is ready, and
  *  we avoid having one thread run so fast that it swaps the  buffers  twice
  *  before the other thread has even started (as embarassingly happened with
- *  the original mutex / condition variable based approach).
+ *  my original mutex / condition variable based approach).
  */
 struct mediocre_functor_control {
     pthread_t thread_id;
     
     sem_t command_ready_sem;
     sem_t functor_ready_sem;
+    
+    // Variable starts at 0 and set to true once we issue an exit command to
+    // the user's combine functor loop (set by functor thread, not input
+    // thread). The user is supposed to return 0 on success and nonzero when
+    // exiting abnormally. However, users are known to make mistakes: they
+    // might return abnormally without finishing their assigned commands but
+    // return 0 anyway. If we get 0 back from the user's loop function, we
+    // check that this variable is true to ensure that they really returned
+    // because we told them to, not because they had an error they're hiding
+    // from us.
+    int received_exit_command;
     
     // Double-buffering scheme:
     // The two flags here keep track of which buffer is being used for which
@@ -91,7 +103,7 @@ struct mediocre_functor_control {
     
     // Used to pass data through the pthread start function.
     // (maximum_request also used to allocate aligned_temp).
-    void (*functor_loop_function)(
+    int (*functor_loop_function)(
         MediocreFunctorControl* control,
         void const* user_data,
         MediocreDimension maximum_request
@@ -125,13 +137,18 @@ static inline struct functor_buffer* functor_buffer(MediocreFunctorControl* c) {
  */
 struct mediocre_input_control {
     size_t thread_count;
-    int nonzero_error;
     MediocreDimension input_dimension;
     MediocreDimension maximum_request;
     MediocreFunctorControl* previous_iteration_thread; // Starts as null.
     float* combine_output;  // output pointer passed to mediocre_combine.
     size_t current_thread_index;
     size_t current_offset;
+    
+    // Initially false: set to true once we issue an exit command to the
+    // user's input loop function. After we get control back from the user's
+    // function, we check this to see if the user returned successfully
+    // or if the user returned early due to an error.
+    int received_exit_command;
     
     MediocreFunctorControl functor_threads[];
 };
@@ -155,14 +172,14 @@ static const MediocreFunctorCommand functor_exit = { 1, { 0, 0 }, NULL, NULL };
  *  combine  functor  threads  under  the  control  of the input thread. The
  *  command also specifies which subrange of the input that we want the user
  *  to  load  into the buffer in chunk format. In each iteration, we need to
- *  wait for the thread that the user loaded data into to finish its current
- *  workload,  and  command  that  thread  to  start combining its new input
- *  data.
+ *  wait for the thread that we ordered the user to load data into  (in  the
+ *  previous  iteration)  to  finish  its current workload, and command that
+ *  thread to start combining its new input data.
  *  
  *  Precondition: MediocreInputControl must be set up with at least 1 struct
  *  mediocre_functor_control  in  the functor_threads array (thread_count >=
  *  1). Each of those structs must be properly initialized  with  a  running
- *  thread,  and  the  semaphors should all be initialized with the value 0.
+ *  thread,  and  the semaphores should all be initialized with the value 0.
  *  These preconditions are all handled by mediocre_combine; the user of the
  *  mediocre library doesn't need to worry about this.
  *  
@@ -194,21 +211,13 @@ static const MediocreFunctorCommand functor_exit = { 1, { 0, 0 }, NULL, NULL };
  */
 MediocreInputCommand
 mediocre_input_control_get(MediocreInputControl* control) {
-    // Quit if the user reported an error. We don't care about ordering the
-    // previous thread to run in this case, because we are terminating
-    // abnormally anyway.
-    if (control->nonzero_error != 0) {
-        return input_exit;
-    }
-    
     int status;
     
     // Wait for the previous iteration's thread, if any, to finish working and
-    // command it to work on the new data loaded in the last iteration. From
-    // the input thread's perspective, this is as simple as waiting on the
-    // semaphor that the combine thread will increment when it is ready,
-    // us having already, in the previous iteration, having incremented
-    // the semaphor that prev_thr is waiting on.
+    // command it to work on the new data loaded in the last iteration. To do
+    // this, we post the semaphore that the functor thread is waiting on and
+    // then wait on the semaphore that the functor thread will post when it
+    // is ready. Also swap the buffers.
     MediocreFunctorControl* const prev_thr = control->previous_iteration_thread;
     if (prev_thr != NULL) {
         const size_t odd_flag = prev_thr->input_odd_flag;
@@ -226,10 +235,12 @@ mediocre_input_control_get(MediocreInputControl* control) {
         // Check for any errors reported by the combine functor thread.
         // This code was reported through the functor thread's buffer, which
         // is now input thread's buffer since the buffers were swapped.
-        // If so, copy the error code to our own control structure and quit.
+        // If so, the combine functor thread has terminated abnormally and
+        // we should order the user's input loop thread to quit as well,
+        // as there is no point to continuing computation anymore.
         const int error_code = input_buffer(prev_thr)->nonzero_error;
         if (error_code != 0) {
-            control->nonzero_error = error_code;
+            control->received_exit_command = 1;
             return input_exit;
         }
     }
@@ -260,6 +271,7 @@ mediocre_input_control_get(MediocreInputControl* control) {
     // the last thread with input written to it to run.
     
     if (offset >= control->input_dimension.width) {
+        control->received_exit_command = 1;
         return input_exit;
     } else {
         // Always give the user the maximum request that we promised we'd give,
@@ -291,14 +303,6 @@ mediocre_input_control_get(MediocreInputControl* control) {
     return command;
 }
 
-void mediocre_input_error(MediocreInputControl* control, int error_code) {
-    if (error_code == 0) {
-        error_code = -1;
-        fprintf(stderr, "mediocre_input_error: reporting error 0 as -1.\n");
-    }
-    control->nonzero_error = error_code;
-}
-
 /*  Function that the implementor of a combine functor loop is  expected  to
  *  call each iteration to get a command. Cooperates with
  *  mediocre_input_control_get to signal its completion of its command,  and
@@ -308,75 +312,88 @@ MediocreFunctorCommand
 mediocre_functor_control_get(MediocreFunctorControl* control) {
     int status;
     
-    // See if the user reported an error since the last time we were called.
-    const int error_code = functor_buffer(control)->nonzero_error;
-    
     const size_t odd_flag = control->functor_odd_flag;
     
-    do {
-        status = sem_post(&control->functor_ready_sem);
-    } while (status != 0 && errno == EINTR);
+    status = sem_post(&control->functor_ready_sem);
     CHECK_STATUS_VARIABLE("sem_post");
     
-    status = sem_wait(&control->command_ready_sem);
+    do {
+        status = sem_wait(&control->command_ready_sem);
+    } while (status != 0 && errno == EINTR);
     CHECK_STATUS_VARIABLE("sem_wait");
     
     control->functor_odd_flag = !odd_flag;
     
-    // Now, if the user reported some error, the input thread is now awake and
-    // aware of it. Order the functor loop to exit now if that's the case.
-    if (error_code != 0) {
-        return functor_exit;
-    }
-    
     struct functor_buffer* functor_thread_buffer = functor_buffer(control);
     
-    MediocreFunctorCommand command = {
-        functor_thread_buffer->command_output == NULL,  // _exit
-        functor_thread_buffer->command_dimension,       // dimension
-        functor_thread_buffer->chunk_data,              // input_chunks
-        functor_thread_buffer->command_output           // output
-    };
-    return command;
-}
-
-/*  Function that the implementor of a combine functor should call  in  case
- *  of  an  error  condition.  This  eventually  causes  the input loop that
- *  controls this functor  thread  to  terminate,  and  mediocre_combine  to
- *  return   an   error   code.   The   error   code   is   stored   in  the
- *  functor thread's buffer, and will be read by the  input  thread  through
- *  the input thread's buffer once the buffers are swapped.
- */
-void mediocre_functor_error(MediocreFunctorControl* control, int error_code) {
-    if (error_code == 0) {
-        error_code = -1;
-        fprintf(stderr, "mediocre_functor_error: reporting error 0 as -1.\n");
+    if (functor_thread_buffer->command_output == NULL) {
+        control->received_exit_command = 1;
+        return functor_exit;
+    } else {
+        MediocreFunctorCommand command = {
+            0,
+            functor_thread_buffer->command_dimension,
+            functor_thread_buffer->chunk_data,
+            functor_thread_buffer->command_output
+        };
+        return command;
     }
-    functor_buffer(control)->nonzero_error = error_code;
 }
 
 static MediocreDimension get_maximum_request(MediocreDimension input_dim) {
     MediocreDimension result = input_dim;
     const size_t n = 160000 / input_dim.combine_count;
-    result.width = (n + 7) & ~7;
+    const size_t width = (n + 7) & ~7;
+    result.width = width == 0 ? 8 : width;
     return result;
 }
 
 /*  Helper function needed for pthread_create. Takes a pointer to  a  struct
  *  mediocre_functor_control  and  launches a functor loop thread using that
- *  structure as the  control structure.  The  function  pointer  and  other
+ *  structure as the control  structure.  The  function  pointer  and  other
  *  arguments  for  the  functor  loop  function are included in the control
- *  structure.
+ *  structure. The function then copies the error code returned by the  user
+ *  to the control structure, notifying the input loop thread of the functor
+ *  thread's abnormal termination if needed.
  */
-static void* start_function(void* functor_control_pv) {
+static void* functor_start_function(void* functor_control_pv) {
     MediocreFunctorControl* functor_control =
         (MediocreFunctorControl*)functor_control_pv;
     
-    functor_control->functor_loop_function(
+    int error_code = functor_control->functor_loop_function(
         functor_control,
         functor_control->user_data,
         functor_control->maximum_request
     );
+    
+    if (error_code == 0 && !functor_control->received_exit_command) {
+        fprintf(stderr,
+        "\x1b[1m\x1b[31mXXX\t\tXXX\t\tXXX\x1b[0m\n"
+        "\tmediocre: Warning, a MediocreFunctor loop_function returned 0,\n"
+        "\tindicating no error, but it appears to have terminated abnormally.\n"
+        "\tThis is not guaranteed to work; please fix the functor loop\n"
+        "\tfunction implementation if you can.\n"
+        "\tReporting error code -1 instead of 0.\n"
+        );
+        
+        error_code = -1;
+    }
+    
+    // If the error_code is nonzero, then the user's function terminated
+    // abnormally and we need to let the input loop thread that may be
+    // waiting on us know. Copy the error code to the functor_buffer struct
+    // that we have access to and signal the semaphore that unblocks the input
+    // thread. This swaps the buffers, and the input thread will read the
+    // error code that we reported through the input_buffer.
+    if (error_code != 0) {
+        int status = 0;
+        functor_buffer(functor_control)->nonzero_error = error_code;
+        
+        status = sem_post(&functor_control->functor_ready_sem);
+        CHECK_STATUS_VARIABLE("sem_post");
+        
+        functor_control->functor_odd_flag = !functor_control->functor_odd_flag;
+    }
     
     return NULL;
 }
@@ -392,7 +409,7 @@ static void* start_function(void* functor_control_pv) {
  *  To users of the library, this is the function that allows  them  to  run
  *  any  combine  functor  implementation  on  any  specified  input,  while
  *  specifying the number of threads to be used and the  destination  buffer
- *  as a flat C array.
+ *  as a flat C array of floats.
  */
 int mediocre_combine(
     float* output,
@@ -477,13 +494,13 @@ int mediocre_combine(
         (char*)allocated + functor_buffer_size * 2u * thread_count);
     
     input_control->thread_count = (size_t)thread_count;
-    input_control->nonzero_error = 0;
     input_control->input_dimension = input.dimension;
     input_control->maximum_request = maximum_request;
     input_control->previous_iteration_thread = NULL;
     input_control->combine_output = output;
     input_control->current_thread_index = 0;
     input_control->current_offset = 0;
+    input_control->received_exit_command = 0;
     
     // Now initialize the array of MediocreFunctorControl.
     for (int i = 0; i < thread_count; ++i) {
@@ -496,6 +513,8 @@ int mediocre_combine(
         
         status = sem_init(&functor_control->functor_ready_sem, 0, 0);
             CHECK_STATUS_VARIABLE("sem_init functor_ready_sem");
+        
+        functor_control->received_exit_command = 0;
         
         functor_control->functor_odd_flag = 0;
         functor_control->input_odd_flag = 0;
@@ -526,7 +545,7 @@ int mediocre_combine(
         status = pthread_create(
             &functor_control->thread_id,
             NULL,
-            start_function,
+            functor_start_function,
             functor_control
         );
         // We try to be failure-tolerant if a thread fails to start due to
@@ -569,17 +588,17 @@ int mediocre_combine(
     // with the flexible array member input_control->functor_threads.
     assert((const char*)allocated + bytes_allocated >=
            (const char*)
-           (&input_control->functor_threads[input_control->thread_count]));
+           (input_control->functor_threads + input_control->thread_count));
     
     // We can finally pass control to the user's input loop.
-    input.loop_function(input_control, input.user_data, input.dimension);
+    int error_code =
+        input.loop_function(input_control, input.user_data, maximum_request);
     
     // Signal each thread to exit, then join the threads and reclaim
     // resources used in each MediocreFunctorControl structure.
     for (int i = 0; i < thread_count; ++i) {
         // Wait for completion and join thread.
         MediocreFunctorControl* control = &input_control->functor_threads[i];
-        void* ignored;
         
         // Send command to functor thread to quit.
         input_buffer(control)->command_output = NULL;
@@ -589,7 +608,7 @@ int mediocre_combine(
         
         control->input_odd_flag = !control->input_odd_flag;
         
-        status = pthread_join(control->thread_id, &ignored);
+        status = pthread_join(control->thread_id, NULL);
             CHECK_STATUS_VARIABLE("pthread_join");
         
         // Destroy the resources used by the control structure.
@@ -610,14 +629,31 @@ int mediocre_combine(
     }
     
     // Check for errors in either the input loop or any of the functor threads.
-    // Normally functor thread error codes are forwarded to the input thread
-    // control's error code, but if an error occurs very late, it might not
-    // be reported in time (I think), so we check anyway.
-    int error_code = input_control->nonzero_error;
+    if (error_code == 0 && !input_control->received_exit_command) {
+        fprintf(stderr,
+        "\x1b[1m\x1b[31mXXX\t\tXXX\t\tXXX\x1b[0m\n"
+        "\tmediocre: Warning, a MediocreInput loop_function returned 0,\n"
+        "\tindicating no error, but appears to have terminated\n"
+        "\tabnormally. This is not guaranteed to work. Please fix\n"
+        "\tthe input loop function if you can.\n"
+        "\tReporting error code -1 instead of 0.\n"
+        );
+        
+        error_code = -1;
+    }
     
-    for (int i = 0; i < thread_count && error_code == 0; ++i) {
+    for (int i = 0; i < thread_count; ++i) {
+        // I'm not really sure what state my slimy double buffer implementation
+        // will be in at this point so I'm checking both buffers for nonzero
+        // error codes. You are welcome to hate me for this :(.
         MediocreFunctorControl* control = &input_control->functor_threads[i];
-        error_code = input_buffer(control)->nonzero_error;
+        
+        if (error_code == 0) {
+            error_code = control->odd_input_buffer->nonzero_error;
+        }
+        if (error_code == 0) {
+            error_code = control->even_input_buffer->nonzero_error;
+        }
     }
     
     free(allocated);
@@ -659,7 +695,11 @@ int mediocre_combine_destroy(
  *  by  this running functor thread) and returns it to the user. If it isn't
  *  there, we allocate it (with the allocation being wide  enough  to  store
  *  maximum_request.width  floats, where maximum_request.width is guaranteed
- *  to be divisible by 8). This buffer will  be  freed  by  mediocre_combine
+ *  to be divisible by 8). This might be much more memory than  we  promised
+ *  the  caller  but  should  never  be less, since the command passed as an
+ *  argument should have been created by the control structure passed, which
+ *  will  never  create  a  command  with  a  dimension  field  greater than
+ *  control->maximum_request. This buffer will be freed by  mediocre_combine
  *  when it joins all the functor threads.
  */
 __m256* mediocre_functor_aligned_temp(
@@ -671,6 +711,10 @@ __m256* mediocre_functor_aligned_temp(
     ) {
         return (__m256*)command.output;
     }
+    
+    MediocreDimension dim = command.dimension;
+    assert(dim.width <= control->maximum_request.width);
+    assert(dim.combine_count <= control->maximum_request.combine_count);
     
     if (control->aligned_temp == NULL) {
         void* ptr;

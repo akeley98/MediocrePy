@@ -9,7 +9,7 @@
 #include "mediocre.h"
 #include "testing.h"
 
-static void u16_input_loop(
+static int u16_input_loop(
     MediocreInputControl* control,
     void const* user_data,
     MediocreDimension dimension
@@ -35,6 +35,8 @@ static void u16_input_loop(
             }
         }
     }
+    
+    return 0;
 }
 
 static void no_op(void* ignored) {
@@ -61,7 +63,7 @@ static MediocreInput u16_input(
 static struct Random* generator;
 static struct timeb timer_begin;
 
-static const size_t test_count = 8;
+static const size_t test_count = 24;
 static const size_t max_offset = 15;           // Array can be offset to test
 static const size_t min_array_count = 50;      // for alignment bugs.
 static const size_t max_array_count = 250;

@@ -287,7 +287,7 @@ struct arguments {
     size_t max_iter;
 };
 
-static void loop_function(
+static int loop_function(
     MediocreFunctorControl* control,
     void const* user_data,
     MediocreDimension maximum_request
@@ -298,7 +298,7 @@ static void loop_function(
     const __m256d sigma_upper = _mm256_set1_pd(arguments_ptr->sigma_upper);
     const size_t max_iter = arguments_ptr->max_iter;
     
-    void* scratch_pv;
+    void* scratch_pv = NULL;
     int status = posix_memalign(
         &scratch_pv,
         sizeof(__m256),
@@ -307,11 +307,13 @@ static void loop_function(
     
     if (status != 0) {
         perror("mediocre_clipped_median_functor could not allocate memory");
-        mediocre_functor_error(control, status);
+        return (errno == 0 ? -1 : errno);
     }
     
     __m256* scratch = (__m256*)scratch_pv;
     MediocreFunctorCommand command;
+    
+    int error_code = 0;
     
     MEDIOCRE_FUNCTOR_LOOP(command, control) {
         // Divide the requested width by 8 (rounded up) to get the chunk count.
@@ -322,13 +324,15 @@ static void loop_function(
         if (temp_output == NULL) {
             perror("mediocre_clipped_median_functor\n"
                 "could not allocated temp_output");
-            mediocre_functor_error(control, errno);
+            error_code = errno;
+            break;
         } else if (command.dimension.combine_count > max_combine_count) {
             fprintf(stderr, "mediocre_clipped_mean_functor\n"
                 "too many arrays to be combined [%zi > %zi]\n",
                 command.dimension.combine_count, max_combine_count
             );
-            mediocre_functor_error(control, E2BIG);
+            error_code = E2BIG;
+            break;
         } else {
             clipped_median_chunk_m256(
                 temp_output,
@@ -346,6 +350,7 @@ static void loop_function(
     }
     
     free(scratch);
+    return error_code;
 }
 
 static void no_op(void* ignored) {

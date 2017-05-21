@@ -183,7 +183,7 @@ struct arguments {
     size_t max_iter;
 };
 
-static void loop_function(
+static int loop_function(
     MediocreFunctorControl* control,
     void const* user_data,
     MediocreDimension maximum_request
@@ -206,13 +206,13 @@ static void loop_function(
         if (temp_output == NULL) {
             perror("mediocre_clipped_mean_functor\n"
                 "could not allocated temp_output");
-            mediocre_functor_error(control, errno);
+            return errno == 0 ? -1 : errno;
         } else if (command.dimension.combine_count > max_combine_count) {
             fprintf(stderr, "mediocre_clipped_mean_functor\n"
                 "too many arrays to be combined [%zi > %zi]\n",
                 command.dimension.combine_count, max_combine_count
             );
-            mediocre_functor_error(control, E2BIG);
+            return E2BIG;
         } else {
             clipped_mean_chunk_m256(
                 temp_output,
@@ -226,6 +226,8 @@ static void loop_function(
             mediocre_functor_write_temp(command, temp_output);
         }
     }
+    
+    return 0;
 }
 
 static void no_op(void* ignored) {
@@ -261,8 +263,8 @@ MediocreFunctor mediocre_clipped_mean_functor2(
         fprintf(stderr, "sigma_lower must be at least 1.\n");
         result.nonzero_error = ERANGE;
         return result;
-    } else if (sigma_upper > 1.0) {
-        fprintf(stderr, "sigma_upper must be at lest 1.\n");
+    } else if (sigma_upper < 1.0) {
+        fprintf(stderr, "sigma_upper must be at least 1.\n");
         result.nonzero_error = ERANGE;
         return result;
     }
