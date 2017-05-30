@@ -1,12 +1,15 @@
 # mediocre and MediocrePy
+
 An aggressively average SIMD combine library (single-precision float array averages with sigma clipping), 
 
-#First, a word of warning
+# First, a word of warning
+
 Internally, the library uses 256-bit single precision floating point vectors everywhere. This will require the AVX instruction set, introduced in 2011 (Sandy Bridge or later for Intel, Bulldozer or later for AMD, I think). If your computer has a CPU older than this, it won't be able to run this code (not because the CPU is too slow, but because it won't understand the instructions used in the program. It would be like reading Dr. Seuss to your goldfish). Computers with crippled Intel processors (Celerons and Pentiums) also won't be able to run the code, because Intel are run by losers who will happily hold back the march of progress in order to make an extra buck. If you wanted an inexpensive CPU that was actually good, you should have bought an AMD. Not that I only have good things to say about AMD. It turns out that their FX processors have a bug that can slow vectorized memory access down by 10000%, so this code may not perform as well as I'd hoped on those processors. At least Zen's here to save us from 5 years of faildozer.
 
 Keep in mind that compilers are often no help when it comes to memory alignment for such vector data types, so be vigilant. If you are a user of the library just looking to use the default combine and input methods, you don't have to worry about alignment all that much.
 
-#Introduction (skip to here when you tire of reading the warning!)
+# Introduction (skip to here when you tire of reading the warning!)
+
 This library was written to solve the problem of writing high-performance combine routines using vectorization. A combine routine takes a stack of identically-sized input arrays and combines it into a single output array of the same size, where each entry of the output array (with index I) ideally depends only on the data stored at index I of each input array. Let me draw you a picture to illustrate:
 
         input 0: w0, w1, w2, w3, w4, w5
@@ -26,7 +29,7 @@ Iinput arrays can come in lots of different shapes and sizes, can take a long ti
 
 Also consider reading the following high level description.
 
-#High Level Description
+# High Level Description
 
 It was a bit inaccurate for me to say that the library allows for programmers to implement input and combine functions. What's really being implemented are input structures and combine functor structures (Known as MediocreInput and MediocreFunctor in the code). You need to create one instance of each in order to start combining. Consider the following example:
         
@@ -39,15 +42,17 @@ It was a bit inaccurate for me to say that the library allows for programmers to
             float const* input2,
             size_t array_width
         ) {
-1
+            // Part 1
             float const* input_pointers[3] = { input0, input1, input2 };
             MediocreDimension dim;
             dim.combine_count = 3;      // We are combining 3 arrays.
             dim.width = array_width;    // Each array is this wide.
             MediocreInput input = mediocre_float_input(input_pointers, dim);
-2
+            
+            // Part 2
             MediocreFunctor combine_functor = mediocre_mean_functor();
-3
+            
+            // Part 3
             if (input.nonzero_error != 0) {
                 fprintf(stderr, "MediocreInput not constructed.\n");
                 return -1;
@@ -56,9 +61,11 @@ It was a bit inaccurate for me to say that the library allows for programmers to
                 fprintf(stderr, "MediocreFunctor not constructed.\n");
                 return -1;
             }
-4
+            
+            // Part 4
             int err = mediocre_combine(output, input, combine_functor, 2);
-5
+
+            // Part 5
             mediocre_functor_destroy(combine_functor);
             mediocre_input_destroy(input);
             
@@ -77,7 +84,7 @@ The MediocreInput and MediocreFunctor instances may hold resources. In part 5 we
 
 Some convenience functions are defined in the library. `mediocre_output_sizeof` and `mediocre_output_alloc` help with allocating space for holding combine outputs. `mediocre_combine_destroy` and `mediocre_combine2` can automatically free resources held by MediocreInput and MediocreFunctor instances after the combine is finished. For now their documentation is in the header file `mediocre.h`; look around in there to find out more. Note also that all data is loaded as single precision floating point data regardless of the format and data type of the input data. The functions returning MediocreInput instances describing double-precision data are provided for convenience only.
 
-#Input & Combine Implementors' Guide (a.k.a. A treatise on chunk format)
+# Input & Combine Implementors' Guide (a.k.a. A treatise on chunk format)
 
 Now I will describe the terrifying chunk format that I've been hinting at for so long. The chunk format is designed to make computers happy at the expense of humans. Once again I will draw a picture first, in order to illustrate how input arrays are packed into chunk format, but first I'd like to point out that __m256 is a vector of 8 single precision floats, if you didn't already know.
         
@@ -141,7 +148,7 @@ You don't have to use a macro; you can manually write a loop that does what the 
 
 `loop_function` inside `src/median.c` provides a good, relatively simple example of how a loop function should be written. You don't have to understand `clipped_median_chunk_m256`. Just know that it combines an array of `chunk_count` chunks into an array of `chunk_count` __m256 vectors stored in `temp_output`. But first, read some of the specifics below on implementing either an input loop function or a combine functor loop function.
 
-#Specifics of MediocreInput loop_function
+# Specifics of MediocreInput loop_function
 
 Each time a command is received, the input loop function should load columns `offset` to `offset + dimension.width - 1` of the input arrays into the __m256 array `output_chunks`. The columns should be loaded in chunk format, with chunk 0 corresponding to columns `offset` to `offset + 7`, chunk 1 corresponding to `offset + 8` to `offset + 15`, and so on (see above for chunk format).
 
@@ -150,7 +157,7 @@ Each time a command is received, the input loop function should load columns `of
 `dimension.width` will not exceed `maximum_request.width`. It might not be divisible by 8.
 `output_chunks` points to 32-byte aligned storage large enough to store the number of chunks requested (`ceil(dimension.width / 8)`).
 
-#Specifics of MediocreFunctor loop_function
+# Specifics of MediocreFunctor loop_function
 
 The command supplied each iteration specifies a `dimension`, `input_chunks`, and an `output` pointer. The chunks hold data from `dimension.width` columns of data. Each column `N` should be combined with its data written to `output[N]`. As mentioned earlier, this can be done by combining 8 columns at a time and writing 8 outputs at a time by combining one chunk of data at a time. But, there is a catch that I will mention shortly.
 
@@ -161,7 +168,7 @@ The command supplied each iteration specifies a `dimension`, `input_chunks`, and
 
 There are few guarantees on the `output` pointer because it directly points to a portion of the output array passed by the caller of `mediocre_combine`, and we place few constraints on the caller of `mediocre_combine`. Notice that `output` may not be aligned to 32 bytes and it is only wide enough to store `dimension.width` floats, which may not be divisible by 8. Thus, even if you write the output vectors using unaligned store instructions, you still run the risk of overflowing the buffer. If you're writing a combine functor, the functions `mediocre_functor_aligned_temp` and `mediocre_functor_write_temp` are your new best friends.
 
-#Structure of the Library
+# Structure of the Library
 
-#Confession (Design notes)
+# Confession (Design notes)
 
