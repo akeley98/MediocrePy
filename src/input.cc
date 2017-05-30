@@ -1,3 +1,19 @@
+/*  An aggresively average SIMD combine library.
+ *  Copyright (C) 2017 David Akeley
+ *  
+ *  This program is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *  
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ *  GNU General Public License for more details.
+ *  
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
 
 #include <assert.h>
 #include <errno.h>
@@ -211,7 +227,7 @@ void load_data(
     check_type_code<DataType>(data);
     __m256* current_chunk = command.output_chunks;
     
-    const DataType zero = 0;
+    const DataType zero = DataType(0);
     
     DataType const* ptr0 = &zero;
     DataType const* ptr1 = &zero;
@@ -222,10 +238,9 @@ void load_data(
     DataType const* ptr6 = &zero;
     DataType const* ptr7 = &zero;
     
-    assert((command.offset + command.dimension.width) / data.minor_width
-        <= data.major_width);
-    assert((command.offset + command.dimension.width) % data.minor_width
-        <= data.minor_width);
+    const size_t end_index = command.offset + command.dimension.width;
+    assert(end_index / data.minor_width <= data.major_width);
+    assert(end_index % data.minor_width <= data.minor_width);
     
     // The input loop understands only 1D arrays. Convert the 1D offset
     // we got to 2D coordinates: major and minor indices.
@@ -267,16 +282,17 @@ void load_data(
         LOAD_DATA_INCREMENT_VARIABLES_GET_PTR(ptr6);
         LOAD_DATA_INCREMENT_VARIABLES_GET_PTR(ptr7);
         
-        switch (command.dimension.width - i) {
-            case 0: assert(0); abort();
-            case 1: ptr1 = &zero;
-            case 2: ptr2 = &zero;
-            case 3: ptr3 = &zero;
-            case 4: ptr4 = &zero;
-            case 5: ptr5 = &zero;
-            case 6: ptr6 = &zero;
-            case 7: ptr7 = &zero;
-            default: break;
+        if (command.dimension.width - i < 8) {
+            switch (command.dimension.width - i) {
+                default: assert(0); abort();
+                case 1: ptr1 = &zero;
+                case 2: ptr2 = &zero;
+                case 3: ptr3 = &zero;
+                case 4: ptr4 = &zero;
+                case 5: ptr5 = &zero;
+                case 6: ptr6 = &zero;
+                case 7: ptr7 = &zero;
+            }
         }
         
         current_chunk[which_array] =_mm256_set_ps(
@@ -316,14 +332,6 @@ void mask_data(
     char const* current_pointer = row_pointer + minor*mask.minor_stride;
     
     for (size_t i = 0; i < command.dimension.width; ++i) {
-        bool at_row_end = minor+1 >= mask.minor_width;
-        
-        minor = at_row_end ? 0 : minor+1;
-        major += (at_row_end ? 1 : 0);
-        row_pointer += (at_row_end ? mask.major_stride : 0);
-        current_pointer =
-            at_row_end ? row_pointer : current_pointer + mask.minor_stride;
-        
         MaskType value = *reinterpret_cast<MaskType const*>(current_pointer);
         if ((value != 0) == nonzero_means_bad) {
             float* value_to_mask = mediocre_chunk_ptr(
@@ -337,9 +345,22 @@ void mask_data(
                 masked_data, { major, minor }, nonzero_means_bad
             );
         }
+        
+        bool at_row_end = minor+1 >= mask.minor_width;
+        
+        minor = at_row_end ? 0 : minor+1;
+        major += (at_row_end ? 1 : 0);
+        row_pointer += (at_row_end ? mask.major_stride : 0);
+        current_pointer =
+            at_row_end ? row_pointer : current_pointer + mask.minor_stride;
     }
 }
 
+/*  Function used to help check that Mediocre2D instances all have the  same
+ *  size  and  a  valid type code. Returns false if the array's size doesn't
+ *  match with the expected size, or if the type  code  is  not  recognized.
+ *  Returns true otherwise.
+ */
 inline bool array_is_okay(
     Mediocre2D array, size_t major_expected, size_t minor_expected
 ) {
@@ -367,9 +388,173 @@ inline bool array_is_okay(
     }
 }
 
+template <typename DataType>
+MediocreInput
+mediocre_1D_input_impl(DataType const* const* pointers, MediocreDimension dim) {
+    struct UserData {
+        std::vector<DataType const*> ptr_vec;
+        
+        static int loop_function(
+            MediocreInputControl* control,
+            void const* user_data_pv,
+            MediocreDimension maximum_request
+        ) {
+            (void)maximum_request;
+            MediocreInputCommand command;
+            DataType const* const* pointers =
+                static_cast<UserData const*>(user_data_pv)->ptr_vec.data();
+            
+            MEDIOCRE_INPUT_LOOP(command, control) {
+                size_t whole_vector_count = command.dimension.width / 8;
+                size_t remainder = command.dimension.width % 8;
+                
+                for (size_t i = 0; i < command.dimension.combine_count; ++i) {
+                    // The subsection of the array that we are to load data
+                    // from. Array #i + the offset we are given.
+                    DataType const* subarray = pointers[i] + command.offset;
+                    
+                    __m256* current_chunk = command.output_chunks;
+                    
+                    // Load most of the numbers 8 at a time.
+                    for (size_t v = 0; v < whole_vector_count; ++v) {
+                        DataType const* p = subarray + 8*v;
+                        current_chunk[i] = _mm256_set_ps(
+                            float(p[7]), float(p[6]), float(p[5]), float(p[4]),
+                            float(p[3]), float(p[2]), float(p[1]), float(p[0])
+                        );
+                        
+                        current_chunk += command.dimension.combine_count;
+                    }
+                    
+                    // Deal with up to 7 leftover numbers to load.
+                    float f6 = 0, f5 = 0, f4 = 0, f3 = 0, f2 = 0, f1 = 0;
+                    DataType const* p = subarray + 8*whole_vector_count;
+                    switch (remainder) {
+                        case 7: f6 = float(p[6]);
+                        case 6: f5 = float(p[5]);
+                        case 5: f4 = float(p[4]);
+                        case 4: f3 = float(p[3]);
+                        case 3: f2 = float(p[2]);
+                        case 2: f1 = float(p[1]);
+                        case 1:
+                            current_chunk[i] = _mm256_set_ps(
+                                0.0, f6, f5, f4, f3, f2, f1, float(p[0])
+                            );
+                            break;
+                        case 0:
+                            break;
+                    }
+                }
+            }
+            return 0;
+        }
+        
+        static void destructor(void* user_data_pv) {
+            delete static_cast<UserData*>(user_data_pv);
+        }
+    };
+    
+    MediocreInput result;
+    result.loop_function = UserData::loop_function;
+    result.destructor = UserData::destructor;
+    result.user_data = nullptr;
+    result.dimension = dim;
+    result.nonzero_error = 0;
+    
+    try {
+        UserData* user_data = new UserData {
+            std::vector<DataType const*>(pointers, pointers + dim.combine_count)
+        };
+        result.user_data = user_data;
+    } catch (std::bad_alloc&) {
+        result.nonzero_error = ENOMEM;
+    } catch (...) {
+        result.nonzero_error = -1;
+    }
+    return result;
+}
+
 } // end anonymous namespace.
 
 extern "C" {
+
+/*  Export functions to the user that  return  MediocreInput  instances  for
+ *  loading 1D arrays.
+ */
+MediocreInput
+mediocre_i8_input(int8_t const* const* pointers, MediocreDimension dim) {
+    MediocreInput result = mediocre_1D_input_impl(pointers, dim);
+    if (result.nonzero_error != 0) fprintf(stderr,
+        "mediocre_i8_input: %s\n", strerror(result.nonzero_error));
+    return result;
+}
+MediocreInput
+mediocre_i16_input(int16_t const* const* pointers, MediocreDimension dim) {
+    MediocreInput result = mediocre_1D_input_impl(pointers, dim);
+    if (result.nonzero_error != 0) fprintf(stderr,
+        "mediocre_i16_input: %s\n", strerror(result.nonzero_error));
+    return result;
+}
+MediocreInput
+mediocre_i32_input(int32_t const* const* pointers, MediocreDimension dim) {
+    MediocreInput result = mediocre_1D_input_impl(pointers, dim);
+    if (result.nonzero_error != 0) fprintf(stderr,
+        "mediocre_i32_input: %s\n", strerror(result.nonzero_error));
+    return result;
+}
+MediocreInput
+mediocre_i64_input(int64_t const* const* pointers, MediocreDimension dim) {
+    MediocreInput result = mediocre_1D_input_impl(pointers, dim);
+    if (result.nonzero_error != 0) fprintf(stderr,
+        "mediocre_i64_input: %s\n", strerror(result.nonzero_error));
+    return result;
+}
+MediocreInput
+mediocre_u8_input(uint8_t const* const* pointers, MediocreDimension dim) {
+    MediocreInput result = mediocre_1D_input_impl(pointers, dim);
+    if (result.nonzero_error != 0) fprintf(stderr,
+        "mediocre_u8_input: %s\n", strerror(result.nonzero_error));
+    return result;
+}
+MediocreInput
+mediocre_u16_input(uint16_t const* const* pointers, MediocreDimension dim) {
+    MediocreInput result = mediocre_1D_input_impl(pointers, dim);
+    if (result.nonzero_error != 0) fprintf(stderr,
+        "mediocre_u16_input: %s\n", strerror(result.nonzero_error));
+    return result;
+}
+MediocreInput
+mediocre_u32_input(uint32_t const* const* pointers, MediocreDimension dim) {
+    MediocreInput result = mediocre_1D_input_impl(pointers, dim);
+    if (result.nonzero_error != 0) fprintf(stderr,
+        "mediocre_u32_input: %s\n", strerror(result.nonzero_error));
+    return result;
+}
+MediocreInput
+mediocre_u64_input(uint64_t const* const* pointers, MediocreDimension dim) {
+    MediocreInput result = mediocre_1D_input_impl(pointers, dim);
+    if (result.nonzero_error != 0) fprintf(stderr,
+        "mediocre_u64_input: %s\n", strerror(result.nonzero_error));
+    return result;
+}
+MediocreInput
+mediocre_float_input(float const* const* pointers, MediocreDimension dim) {
+    MediocreInput result = mediocre_1D_input_impl(pointers, dim);
+    if (result.nonzero_error != 0) fprintf(stderr,
+        "mediocre_float_input: %s\n", strerror(result.nonzero_error));
+    return result;
+}
+MediocreInput
+mediocre_double_input(double const* const* pointers, MediocreDimension dim) {
+    MediocreInput result = mediocre_1D_input_impl(pointers, dim);
+    if (result.nonzero_error != 0) fprintf(stderr,
+        "mediocre_double_input: %s\n", strerror(result.nonzero_error));
+    return result;
+}
+
+/*  Implement the user_data structure, input loop, and destructor needed for
+ *  MediocreInput instances that load stacks of masked 2D data arrays.
+ */
 
 struct MaskedUserData {
     std::vector<MediocreMasked2D> arrays;
@@ -462,10 +647,18 @@ static void masked_user_data_destructor(void* user_data_pv) {
     delete static_cast<MaskedUserData*>(user_data_pv);
 }
 
+/*  User-visible function that returns a MediocreInput instance intended for
+ *  loading  masked  2D  arrays.  The 2D arrays are not copied into internal
+ *  storage  and  must  remain  valid  for  the  lifetime  of  the  returned
+ *  MediocreInput  instance.  However, the array of MediocreMasked2D objects
+ *  itself will be copied into the MediocreInput's internal storage, so that
+ *  array  can  be safely deleted after the function returns, as long as the
+ *  data pointed to by those MediocreMasked2D objects remains valid.
+ */
 MediocreInput mediocre_2D_masked_input(
     MediocreMasked2D const* masked_arrays,
     size_t count,
-    bool nonzero_means_bad
+    int nonzero_means_bad
 ) {
     MediocreInput result;
     
@@ -504,12 +697,16 @@ MediocreInput mediocre_2D_masked_input(
     
     try {
         masked_user_data = new MaskedUserData;
-        masked_user_data->nonzero_means_bad = nonzero_means_bad;
+        masked_user_data->nonzero_means_bad = nonzero_means_bad != 0;
         masked_user_data->arrays.reserve(count);
         
         for (size_t i = 0; i < count; ++i) {
             masked_user_data->arrays.push_back(masked_arrays[i]);
         }
+        
+        // Don't write out the user_data pointer to the MediocreInput result
+        // (visible to the user) until we are sure that the user_data
+        // object was successfully, fully constructed.
         result.user_data = masked_user_data;
     } catch (std::bad_alloc&) {
         fprintf(stderr,
@@ -522,6 +719,131 @@ MediocreInput mediocre_2D_masked_input(
         fprintf(stderr, "mediocre_2D_masked_input: Unknown error.\n");
         result.nonzero_error = -1;
         delete masked_user_data;
+        return result;
+    }
+    
+    return result;
+}
+
+struct Mediocre2DUserData {
+    std::vector<Mediocre2D> arrays;
+};
+
+static int mediocre_2D_loop_function(
+    MediocreInputControl* control,
+    void const* user_data_pv,
+    MediocreDimension maximum_request
+) {
+    (void)maximum_request;
+    
+    std::vector<Mediocre2D> const& arrays =
+        static_cast<Mediocre2DUserData const*>(user_data_pv)->arrays;
+    
+    MediocreInputCommand command;
+    
+    MEDIOCRE_INPUT_LOOP(command, control) {
+        assert(command.dimension.combine_count == arrays.size());
+        for (size_t i = 0; i < command.dimension.combine_count; ++i) {
+            Mediocre2D data = arrays[i];
+            
+            switch (data.type_code) {
+              default:
+                fprintf(stderr, "Mediocre2D input loop:\n"
+                    "Unknown data type_code %zi (array number [%zi]).\n",
+                    data.type_code, i
+                );
+                return EINVAL;
+              break; case 8:
+                load_data<int8_t>(command, data, i);
+              break; case 16:
+                load_data<int16_t>(command, data, i);
+              break; case 32:
+                load_data<int32_t>(command, data, i);
+              break; case 64:
+                load_data<int64_t>(command, data, i);
+              break; case 108:
+                load_data<uint8_t>(command, data, i);
+              break; case 116:
+                load_data<uint16_t>(command, data, i);
+              break; case 132:
+                load_data<uint32_t>(command, data, i);
+              break; case 164:
+                load_data<uint64_t>(command, data, i);
+              break; case 0xF:
+                load_data<float>(command, data, i);
+              break; case 0xD:
+                load_data<double>(command, data, i);
+            }
+        }
+    }
+    
+    return 0;
+}
+
+static void mediocre_2D_user_data_destructor(void* user_data_pv) {
+    delete static_cast<Mediocre2DUserData*>(user_data_pv);
+}
+
+/*  User-visible function that returns a MediocreInput instance intended for
+ *  loading  2D  data  arrays.  The  2D  arrays are not copied into internal
+ *  storage  and  must  remain  valid  for  the  lifetime  of  the  returned
+ *  MediocreInput  instance. However, the array of Mediocre2D objects itself
+ *  will be copied into the MediocreInput's internal storage, so that  array
+ *  can  be  safely  deleted after the function returns, as long as the data
+ *  pointed to by those Mediocre2D objects remains valid.
+ */
+MediocreInput mediocre_2D_input(Mediocre2D const* arrays, size_t count) {
+    MediocreInput result;
+    
+    result.loop_function = mediocre_2D_loop_function;
+    result.destructor = mediocre_2D_user_data_destructor;
+    result.user_data = nullptr; // Set later.
+    result.dimension.combine_count = count;
+    result.dimension.width = 0; // Set later.
+    result.nonzero_error = 0;
+    
+    Mediocre2DUserData* user_data = nullptr;
+    
+    if (count == 0) {
+        fprintf(stderr, "mediocre_2D_input:\n"
+            "count should not be zero (needs at least one input array).\n"
+        );
+        result.nonzero_error = EINVAL;
+        return result;
+    }
+    
+    size_t major_expected = arrays[0].major_width;
+    size_t minor_expected = arrays[0].minor_width;
+    result.dimension.width = major_expected * minor_expected;
+    
+    for (size_t i = 0; i < count; ++i) {
+        if (!array_is_okay(arrays[i], major_expected, minor_expected)) {
+            result.nonzero_error = EINVAL;
+            return result;
+        }
+    }
+    
+    try {
+        user_data = new Mediocre2DUserData;
+        user_data->arrays.reserve(count);
+        
+        for (size_t i = 0; i < count; ++i) {
+            user_data->arrays.push_back(arrays[i]);
+        }
+        // Don't write out user_data to the returned structure until
+        // we are sure it was successfully, fully constructed.
+        result.user_data = user_data;
+    } catch (std::bad_alloc&) {
+        fprintf(stderr,
+            "mediocre_2D_input: Could not allocate memory.\n"
+        );
+        result.nonzero_error = ENOMEM;
+        delete user_data;
+        return result;
+    } catch (...) {
+        fprintf(stderr, "mediocre_2D_input: Unknown error.\n");
+        result.nonzero_error = -1;
+        delete user_data;
         return result;
     }
     

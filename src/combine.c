@@ -1,3 +1,20 @@
+/*  An aggresively average SIMD combine library.
+ *  Copyright (C) 2017 David Akeley
+ *  
+ *  This program is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *  
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ *  GNU General Public License for more details.
+ *  
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include <assert.h>
 #include <errno.h>
 #include <immintrin.h>
@@ -419,9 +436,11 @@ int mediocre_combine(
 ) {
     int status;
     
-    MediocreDimension maximum_request = get_maximum_request(input.dimension);
-    
-    assert(maximum_request.width % 8 == 0 && maximum_request.width > 0);
+    if (input.dimension.combine_count == 0) {
+        fprintf(stderr, "mediocre_combine: input.dimension.combine_count "
+            "must not be 0.\n");
+        return (errno = EINVAL);
+    }
     
     if (output == NULL) {
         fprintf(stderr, "mediocre_combine: cannot have null output.\n");
@@ -444,6 +463,10 @@ int mediocre_combine(
         fprintf(stderr, "mediocre_combine: needed positive thread_count.\n");
         return (errno = ERANGE);
     }
+    
+    MediocreDimension maximum_request = get_maximum_request(input.dimension);
+    
+    assert(maximum_request.width % 8 == 0 && maximum_request.width > 0);
     
     // First we need to allocate memory. We need one MediocreInputControl
     // structure, one MediocreFunctorControl for each thread, and two
