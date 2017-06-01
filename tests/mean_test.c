@@ -1,4 +1,4 @@
-/*  An aggresively average SIMD python module
+/*  An aggresively average SIMD combine library
  *  Copyright (C) 2017 David Akeley
  *  
  *  This program is free software: you can redistribute it and/or modify
@@ -83,7 +83,7 @@ static const size_t max_offset = 15;           // Array can be offset to test
 static const size_t min_array_count =   1;     // for alignment bugs.
 static const size_t max_array_count = 600;
 static const size_t min_bin_count = 1;
-static const size_t max_bin_count = 500000;
+static const size_t max_bin_count = 600000;
 static const uint32_t min_max_iter = 0;
 static const uint32_t max_max_iter = 15;
 static const int max_thread_count = 15;
@@ -186,8 +186,6 @@ static void test_mean(
     printf("thread_count = %i\n", thread_count);
     ftime(&timer_begin);
     
-    
-    
     int status = mediocre_combine_destroy(
         output_pointer,
         u16_input(
@@ -203,7 +201,7 @@ static void test_mean(
     printf("\33[0m\n");
     
     if (status != 0) {
-        perror("mediocre_clipped_mean_u16 failed");
+        perror("clipped mean failed");
         exit(1);
     }
     
@@ -239,18 +237,121 @@ static void test_mean(
         if (clipped_mean != output_pointer[i]) {
             printf("[%zi] %f != %f\n[", i, clipped_mean, output_pointer[i]);
             for (size_t a = 0; a < array_count; ++a) {
-                printf(" %u", input_pointers[a][i]);
+                printf(" %u,", input_pointers[a][i]);
             }
             printf(" ]\n");
             exit(1);
         }
     } while (i != 0);
     
-    if(check_canary_page(output_page) < 0) {
+    if (check_canary_page(output_page) < 0) {
         printf("Output buffer overrun.\n");
         exit(1);
     }
     
+    // Now test the scaled mean function.
+    struct CanaryPage scale_page;
+    if (init_canary_page(&scale_page, sizeof(float)*array_count, 0) != 0) {
+        perror("Could not allocate scale factors array");
+        exit(1);
+    }
+    float* scale_factors = (float*)scale_page.ptr;
+    
+    for (size_t a = 0; a < array_count; ++a) {
+        scale_factors[a] = 0.5 + 1e-3 * (random_u32(generator) % 1000);
+    }
+    
+    printf("sigma[-%f, %f] max_iter %zi\n", sigma_lower, sigma_upper, max_iter);
+    printf("thread_count = %i\n", thread_count);
+    ftime(&timer_begin);
+    
+    status = mediocre_combine(
+        output_pointer,
+        u16_input(
+            (uint16_t const* const*)input_pointers,
+            array_count,
+            bin_count),
+        mediocre_scaled_mean_functor2(
+            scale_factors,
+            array_count,
+            sigma_lower,
+            sigma_upper,
+            max_iter),
+        thread_count
+    );
+    
+    printf("\33[33m\33[1mscaled mean: ");
+    print_timer_elapsed(timer_begin, array_count * bin_count);
+    printf("\33[0m\n");
+    
+    if (status != 0) {
+        perror("scaled mean failed");
+        exit(1);
+    }
+    
+    i = bin_count;
+    do {
+        --i;
+        static float scaled[max_array_count];
+        
+        for (size_t a = 0; a < array_count; ++a) {
+            scaled[a] = input_pointers[a][i] * (1.f/scale_factors[a]);
+        }
+        
+        float lower_bound = -1.0f/0.0f, upper_bound = 1.0f/0.0f, clipped_mean;
+        for (size_t it = 0; it != max_iter; ++it) {
+            float sum = 0.0f, count = 0.0f;
+            for (size_t a = 0; a < array_count; ++a) {
+                float n = scaled[a];
+                if (n >= lower_bound && n <= upper_bound) {
+                    count += 1.0f;
+                    sum += n;
+                }
+            }
+            clipped_mean = sum / count;
+            double ss = 0.0;
+            for (size_t a = 0; a < array_count; ++a) {
+                float n = scaled[a];
+                if (n >= lower_bound && n <= upper_bound) {
+                    double dev = n - clipped_mean;
+                    ss += dev * dev;
+                }
+            }
+            double sd = sqrt(ss / count);
+            float new_lb = (float)(clipped_mean - sigma_lower*sd);
+            float new_ub = (float)(clipped_mean + sigma_upper*sd);
+            
+            lower_bound = (new_lb < lower_bound) ? lower_bound : new_lb;
+            upper_bound = (new_ub > upper_bound) ? upper_bound : new_ub;
+        }
+        // Weighted mean of unclipped, scaled numbers.
+        float sum = 0.0f, divisor = 0.0f;
+        for (size_t a = 0; a < array_count; ++a) {
+            float n = scaled[a];
+            if (n >= lower_bound && n <= upper_bound) {
+                sum += n * scale_factors[a];
+                divisor += scale_factors[a];
+            }
+        }
+        float scaled_mean = sum / divisor;
+        float err = 1.0f - (scaled_mean / output_pointer[i]);
+        
+        if (err < -.001 || err > .001) {
+            printf("[%zi] %f != %f\n[", i, scaled_mean, output_pointer[i]);
+            for (size_t a = 0; a < array_count; ++a) {
+                printf(" %u,", input_pointers[a][i]);
+            }
+            printf(" ]\n");
+            printf("scale factors [");
+            for (size_t a = 0; a < array_count; ++a) {
+                printf(" %.3f,", scale_factors[a]);
+            }
+            printf("]\n");
+            exit(1);
+        }
+    } while (i != 0);
+    
+    free_canary_page(scale_page);
     free_canary_page(input_page);
     free_canary_page(output_page);
 }
@@ -258,7 +359,7 @@ static void test_mean(
 int main() {
     generator = new_random();
     
-    for (size_t i = 0; i < 24; ++i) {
+    for (size_t i = 0; i < 2000; ++i) {
         size_t array_count = random_dist_u32(
             generator, min_array_count, max_array_count);
         size_t bin_count = random_dist_u32(

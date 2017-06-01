@@ -1,6 +1,8 @@
 /*  An aggresively average SIMD python module
  *  Copyright (C) 2017 David Akeley
  *  
+ *  Default median functor provided with the library implemented in this file.
+ *  
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
  *  the Free Software Foundation, either version 3 of the License, or
@@ -299,13 +301,13 @@ static int loop_function(
     const size_t max_iter = arguments_ptr->max_iter;
     
     void* scratch_pv = NULL;
-    int status = posix_memalign(
+    errno = posix_memalign(
         &scratch_pv,
         sizeof(__m256),
         maximum_request.combine_count * sizeof(__m256)
     );
     
-    if (status != 0) {
+    if (errno != 0) {
         perror("mediocre_clipped_median_functor could not allocate memory");
         return (errno == 0 ? -1 : errno);
     }

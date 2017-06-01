@@ -1,6 +1,12 @@
-# mediocre and MediocrePy
+# mediocre and MediocrePy (Work in progress! The documentation describes a library that does not yet fully exist)
 
-An aggressively average SIMD combine library (single-precision float array averages with sigma clipping), 
+An aggressively average SIMD combine library (single-precision float array averages with sigma clipping), and a python interface for it.
+
+## Building
+
+I provided a makefile that uses clang as the C and C++ compiler. I used `clang version 3.8.0-2ubuntu4 (tags/RELEASE_380/final)` in development. You can change the compiler in the makefile, but this program is not exactly the most portable program: if you switch the compiler, be aware that the program uses Intel compiler style intrinsics (`__mm256_frobnicate_epu64`). Also, this program depends on `pthread` and `posix_memalign`. It's not designed with non-Unix systems in mind. `make bin/mediocre.so` should make the C library, `make bin/MediocrePy.so` should make the library needed by the python interface.
+
+There's only one header file for C programs for this library: `include/mediocre.h`.
 
 ## First, a word of warning
 
@@ -27,7 +33,7 @@ This is a good time for me to point out that different parts of the README are r
 
 Iinput arrays can come in lots of different shapes and sizes, can take a long time to load, and generally are not in formats convenient for writing vectorized code. The input could be from a bunch of fortran-order arrays of 36 bit integers. It could be coming from a memory mapped FITS file stored on Neptune. It could be from a human-readable list of numbers written out in Yiddish. We want to make it so that one combine algorithm can be run on any input, we want that combine algorithm to be supplied with input in a format designed with vectorization in mind, and we want the combine algorithm to spend as little time as possible waiting for input. To this end, the library divides separates the responsibility of loading input from the responsibility of combining the input, the library specifies the vectorization-friendly chunk format as the method in which input algorithms provide data to combine algorithms, and it runs input algorithms on a separate thread from combine algorithms.
 
-Also consider reading the following high level description.
+I provided an Input & Combine Implementors' Guide that you should read to learn how to implement function compatible with the library. I also plan to write design notes if you are interested in the library itself. In any case, also consider skimming the following high level description and reading the first part of the Implementors' guide to see documentation on chunks.
 
 ## High Level Description
 
@@ -78,6 +84,8 @@ In part 2 we create a MediocreFunctor instance that describes the combine algori
 
 In part 3 we check the error field of the input and functor instances to see any function failed to initialize the structure they were supposed to. `IN THIS LIBRARY, ZERO ALWAYS MEANS SUCCESS AND NON-ZERO INDICATES AN ERROR`. You don't have to check this; mediocre_combine will also check for an error code, forwarding any error codes and cancelling the combine if needed.
 
+While we're talking about conventions, I may as well mention that if you prefer to write out structure types with the `struct` prefix in traditional C style, all structure types with typedef names of the form `MediocreFooBar` in the library can also be referred to in the form `struct mediocre_foo_bar`.
+
 In part 4 we actually run the combine algorithm. Call `mediocre_combine` to do this. It takes a pointer to an array of floats where the output will be stored, one instance each of MediocreInput and MediocreFunctor, and the count of the number of threads to run combine algorithms on. The output will always be written as a flat, continuous C array of floats regardless of the format of the input. `mediocre_combine` will forward a nonzero error code if any errors are reported by the input algorithm or combine algorithm.
 
 The MediocreInput and MediocreFunctor instances may hold resources. In part 5 we release those resorces held by the MediocreInput instance and MediocreFunctor instance by calling `mediocre_functor_destroy` and `mediocre_input_destroy` respectively. These functions, and the functions supplied by MediocreInput and MediocreFunctor implementors that are called to free resources, are expected to never fail.
@@ -107,13 +115,13 @@ Now I will describe the terrifying chunk format that I've been hinting at for so
         
 In words, a group of input arrays is converted to chunk format by packing 8 columns of the input arrays at a time into a chunk. Each chunk consists of `combine_count __m256` vectors, with each vector holding 8 entries from exactly one of the input arrays. Chunk `N` holds data from columns `N*8` to `N*8 + 7`, with vector `V` of the chunk holding input from input array `V`. Extra entries in the vectors of the last chunk should be filled with `0`'s (although I suppose it would be unwise to rely on this requirement).
 
-The chunk format is a bit confusing because it's neither row-major nor column-major. Instead it's sort of this 3D layout where both the most and least significant dimensions correspond to the width axis. It'll make more sense once I explain the reason it's designed this way: it makes it possible for vectorized combine algorithms to combine 8 columns of data at a time while reading as small a portion of memory as possible. You can see how easily chunk 0 can be combined into the output `[a0, a1, a2, a3, a4, a5, a6, a7]`, and how chunk 1 can be combined into `[a8, a9, a10, 0, 0, 0, 0, 0]`. The functions `mediocre_chunk_ptr` and `mediocre_chunk_data` may be helpful for dealing with the chunk format.
+The chunk format is a bit confusing because it's neither row-major nor column-major. Instead it's sort of this 3D layout where both the most and least significant dimensions correspond to the width axis. It'll make more sense once I explain the reason it's designed this way: it makes it possible for vectorized combine algorithms to combine 8 columns of data at a time while reading as small a portion of memory as possible. You can see how easily chunk 0 can be combined into the output `[a0, a1, a2, a3, a4, a5, a6, a7]`, and how chunk 1 can be combined into `[a8, a9, a10, 0, 0, 0, 0, 0]`. A vectorized combine algorithm can calculate 8 results at a time (1 for each lane of the 8 lanes in a vector) just by reading in `combine_count` vectors at a time. The functions `mediocre_chunk_ptr` and `mediocre_chunk_data` may be helpful for dealing with the chunk format: they let you index chunk data as if it were a normal 2D array.
 
 A MediocreInput instance will be tasked with converting data into chunk format. A MediocreFunctor instance will be tasked with combining data in chunk format. As an aspiring MediocreInput or MediocreFunctor implementor, you will write a factory function that will return 4 things to the user through a MediocreInput or MediocreFunctor structure:
 
 A loop function that will poll the mediocre library for commands to either write or combine data in chunk format. It should return nonzero if it encounters an error and zero if it is successful.
 
-A void pointer to "user data", which holds data you need to do your job. This should be cast to the actual type of the user data.
+A void pointer to "user data", which holds data you need to do your job. This pointer will be passed to and should be cast to the actual type of the user data in the functions that you implement.
 
 A destructor function that frees resources held by the user data. This is what gets called by `mediocre_input_destroy` and `mediocre_functor_destroy`. The prototype matches the prototype of `free`, so `free` can be used as the destructor if the only resource held by the user data is the memory it occupies.
 
@@ -121,12 +129,19 @@ An error code that should be nonzero if the factory function failed to properly 
 
 (Of course MediocreInput instances also store the dimension of the input as a MediocreDimension structure. This will probably just be copied from whatever the user specified, though).
 
+Prototypes and structure layouts:
+        int MediocreInput.loop_function(MediocreInputControl*, void const*, MediocreDimension)
+        int MediocreFunctor.loop_function(MediocreFunctorControl*, void const*, MediocreDimension)
+        
+        MediocreInput: { loop_function, destructor, user_data, dimension, nonzero_error }
+        MediocreFunctor: { loop_function, destructor, user_data, nonzero_error }
+
 As mentioned the job of the loop function is to follow commands given by the mediocre library. The loop function will be launched with a pointer to a control structure that gives commands, the pointer to the user data mentioned earlier, and a MediocreDimension that specifies the maximum amount of data that the loop function will ever be requested to load or combine at once. Here's the pseudocode for a loop function:
         
         loop_function(control_struct, user_data, maximum_request):
-            cast user_data to the correct type
+            cast user_data from void* to pointer to correct type
             perform initialization needed, such as allocating temporary storage
-            maximum_request can be used for this
+            maximum_request can be helpful for this
             
             while control_struct has a new command:
                 follow that command
@@ -137,16 +152,19 @@ As mentioned the job of the loop function is to follow commands given by the med
             de-initialize
             return 0
 
-The mediocre library provides `MediocreInputCommand` and `MediocreFunctorCommand` types as well as `MEDIOCRE_INPUT_LOOP` and `MEDIOCRE_FUNCTOR_LOOP` macros that correspond to the `while control_struct has a new command` part of the above pseudocode. Within a loop function, the loop macro should be called with the name of a command variable to store commands in and the pointer to the control structure, and can be used in place of a while statement, like so:
+The mediocre library provides `MediocreInputCommand` and `MediocreFunctorCommand` types as well as `MEDIOCRE_INPUT_LOOP` and `MEDIOCRE_FUNCTOR_LOOP` macros that correspond to the `while control_struct has a new command` part of the above pseudocode. Within a loop function, the loop macro should be called with the name of a command variable to store commands in and the pointer to the control structure, and can be used in place of a for statement, like so:
         
         MediocreFunctorCommand command;
         MEDIOCRE_FUNCTOR_LOOP(command, control_struct) {
             /* do the thing */
+            if (disaster) return error_code
         }
+
+You can break or return out of the loop, and can continue to the next command, just like in an ordinary for loop (because the macro _is_ a for statement).
 
 You don't have to use a macro; you can manually write a loop that does what the macro does. All the loop does every iteration is call `mediocre_input_control_get` or `mediocre_functor_control_get` with the control structure as the argument. The function returns a command, and the loop terminates immediately if the command's _exit field is true. The get command function should not be called again until the loop has completely finished the previous command.
 
-`loop_function` inside `src/median.c` provides a good, relatively simple example of how a loop function should be written. You don't have to understand `clipped_median_chunk_m256`. Just know that it combines an array of `chunk_count` chunks into an array of `chunk_count __m256` vectors stored in `temp_output`. But first, read some of the specifics below on implementing either an input loop function or a combine functor loop function.
+`loop_function` inside `src/median.c` provides a good, relatively simple example of how a loop function should be written. You don't have to understand `clipped_median_chunk_m256`. Just know that it combines an array of `chunk_count` chunks of `combine_count __m256` vectors into an array of `chunk_count __m256` vectors stored in `temp_output`. But first, read some of the specifics below on implementing either an input loop function or a combine functor loop function.
 
 ## Specifics of MediocreInput loop_function
 
@@ -157,6 +175,8 @@ Each time a command is received, the input loop function should load columns `of
 `dimension.width` will not exceed `maximum_request.width`. It might not be divisible by 8.
 `output_chunks` points to 32-byte aligned storage large enough to store the number of chunks requested (`ceil(dimension.width / 8)`).
 
+The loop function will be run on the same thread that called `mediocre_combine`. This should simplify dealing with locked data structures, but means that the input function may be a bottleneck.
+
 ## Specifics of MediocreFunctor loop_function
 
 The command supplied each iteration specifies a `dimension`, `input_chunks`, and an `output` pointer. The chunks hold data from `dimension.width` columns of data. Each column `N` should be combined with its data written to `output[N]`. As mentioned earlier, this can be done by combining 8 columns at a time and writing 8 outputs at a time by combining one chunk of data at a time. But, there is a catch that I will mention shortly.
@@ -166,7 +186,9 @@ The command supplied each iteration specifies a `dimension`, `input_chunks`, and
 `input_chunks` points to 32-byte aligned storage that stores the number of chunks needed to store the columns of data you are to combine (`ceil(dimension.width / 8)`.
 `output` points to an array of floats wide enough to store `dimension.width` floats.
 
-There are few guarantees on the `output` pointer because it directly points to a portion of the output array passed by the caller of `mediocre_combine`, and we place few constraints on the caller of `mediocre_combine`. Notice that `output` may not be aligned to 32 bytes and it is only wide enough to store `dimension.width` floats, which may not be divisible by 8. Thus, even if you write the output vectors using unaligned store instructions, you still run the risk of overflowing the buffer. If you're writing a combine functor, the functions `mediocre_functor_aligned_temp` and `mediocre_functor_write_temp` are your new best friends.
+There are few guarantees on the `output` pointer because it directly points to a portion of the output array passed by the caller of `mediocre_combine`, and we place few constraints on the caller of `mediocre_combine`. Notice that `output` may not be aligned to 32 bytes and it is only wide enough to store `dimension.width` floats, which may not be divisible by 8. Thus, even if you write the output vectors using unaligned store instructions, you still run the risk of overflowing the buffer. If you're writing a combine functor, the functions `mediocre_functor_aligned_temp` and `mediocre_functor_write_temp` are your new best friends. Call `mediocre_functor_aligned_temp` with the command received and a pointer to your control structure in order to received an `__m256` pointer that points to 32 byte aligned storage wide enough to store `ceil(command.dimension.width / 8) __m256` vectors. You can then safely write your output to this temporary array using `__m256` pointers. Just remember to call `mediocre_functor_write_temp` to copy the temporary buffer to the real output pointer.
+
+`mediocre_combine` will invoke the loop function once for each thread that it launches. The combine work will be split among the different threads. It is very important then that the loop function is thread safe.
 
 ## Structure of the Library
 

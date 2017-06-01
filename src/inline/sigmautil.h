@@ -30,9 +30,8 @@ struct ClipBoundsM256 { __m256 lower, upper; };
 
 /*  Return a mask representing whether each float arg[i] (lane i of arg)  is
  *  in  the  clipping  range  represented  by the corresponding lanes of the
- *  vectors in the clipping bounds (inclusive). mask[i]  is  positive  (high
- *  bit  0)  if  arg[i] was in-range, negative (high bit 1) if it was out of
- *  range.
+ *  vectors in the clipping bounds  (inclusive).  mask[i]  is  all  zero  if
+ *  arg[i] was in-range, all ones if it was out of range.
  */
 static inline __m256 sigma_mask(__m256 arg, struct ClipBoundsM256 bounds) {
     __m256 const lower_mask = _mm256_cmp_ps(arg, bounds.lower, _CMP_LT_OQ);

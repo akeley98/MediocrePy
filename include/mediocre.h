@@ -268,6 +268,8 @@ for (command = mediocre_functor_control_get(control); \
  *  the requirements for the return pointer  guaranteed  by  this  function.
  *  Implementors   may   call   mediocre_functor_write_temp   in  this  case
  *  regardless; they do not need to check for this condition.
+ *  
+ *  You DON'T have to free the memory returned.
  */
 __m256* mediocre_functor_aligned_temp(
     MediocreFunctorCommand, MediocreFunctorControl*
@@ -323,8 +325,20 @@ static inline float mediocre_chunk_data(
     return *mediocre_chunk_ptr(ptr, combine_count, combine_axis, width_axis);
 }
 
+/*  Factory function that returns a MediocreFunctor that combines arrays  by
+ *  taking the mean of each column's data.
+ */
 MediocreFunctor mediocre_mean_functor();
 
+/*  Factory function that returns a  MediocreFunctor  that  combines  arrays
+ *  using  the  sigma  clipped  mean algorithm. The algorithm performs up to
+ *  max_iter iterations of sigma clipping to clip out outliers, and  returns
+ *  the mean of those numbers in a column that were not clipped out. In each
+ *  iteration of sigma clipping,  the  mean  and  standard  deviation  of  a
+ *  column's  numbers  that were not clipped out are calculated, and numbers
+ *  in that column that were more than sigma_upper standard deviations above
+ *  or sigma_lower standard deviations below the mean are clipped out.
+ */
 MediocreFunctor mediocre_clipped_mean_functor2(
     double sigma_lower, double sigma_upper, size_t max_iter
 );
@@ -335,7 +349,29 @@ static inline MediocreFunctor mediocre_clipped_mean_functor(
     return mediocre_clipped_mean_functor2(sigma, sigma, max_iter);
 }
 
-
+/*  Factory functions for creating MediocreFunctors that combine data  using
+ *  the scaled mean algorithm.
+ *  
+ *  The scaled mean was  designed  with  the  use  case  of  combining  many
+ *  astronomical photographs with different exposure times. To compare these
+ *  photographs for outliers, we need to first  scale  them  so  that  their
+ *  brightnesses  are similar. This is done by dividing each quantity by its
+ *  scale factor and sigma clipping  those  divided  quantities  (using  the
+ *  sigma  and  max_iter  arguments  as in the clipped mean functors). Then,
+ *  when outliers are removed, we take the weighted mean  of  the  remaining
+ *  quantities,  with  each  quantity's scale factor as its weight (weighted
+ *  mean because  data  from  photographs  with  longer  exposure  times  is
+ *  generally  more  reliable than data from photographs with short exposure
+ *  times).
+ *  
+ *  The scaled mean functor factory additionally  requires  an  input  array
+ *  [scale_factors]  of  [scale_count] floats. The returned functor can only
+ *  combine  stacks  of  exactly  [scale_count]  arrays  (in  other   words,
+ *  combine_count  ==  scale_count). When combining a stack of arrays, array
+ *  number i will use scale_factors[i] as  its  scale  factor.  The  functor
+ *  makes  its  own  copy  of the input array; the array may be freed at any
+ *  time after this factory function returns.
+ */
 MediocreFunctor mediocre_scaled_mean_functor2(
     float const* scale_factors,
     size_t scale_count,
@@ -355,7 +391,16 @@ static inline MediocreFunctor mediocre_scaled_mean_functor(
     );
 }
 
-
+/*  Factory functions for returning MediocreFunctor instances  that  combine
+ *  arrays  by  taking  the median of each column of data. Sigma clipping is
+ *  performed in a  similar  fashion  as  in  the  clipped  mean  algorithm:
+ *  outliers  are defined as quantities more than sigma_upper*sigma above or
+ *  more than sigma_lower*sigma below the median of numbers not clipped out,
+ *  where  sigma is defined as the standard deviation from the median (i.e.,
+ *  the standard deviation of the remaining  numbers  calculated  using  the
+ *  median  where  the  mean would usually be used in the standard deviation
+ *  formula.
+ */
 MediocreFunctor mediocre_median_functor();
 
 MediocreFunctor mediocre_clipped_median_functor2(
