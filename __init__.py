@@ -1,182 +1,233 @@
-#! /usr/bin/python2.7
+# An aggresively average SIMD python module
+# Copyright (C) 2017 David Akeley
+# 
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import errno
-import sys
+from . import _c
+Dimension = _c.Dimension
+struct_mediocre_functor = _c.FunctorBlob
+
+import numpy as _np
 import os
-from ctypes import * # They put annoying c_ prefixes on EVERYTHING, that's why.
-import numpy as np
 
-try:
-    _libname = os.path.join(os.path.split(__file__)[0], "bin/MediocrePy.so")
-    _lib = cdll.LoadLibrary(_libname)
-except OSError as e:
-    print>>sys.stderr, e.message
-    message = "Failed to load C library %r. "\
-        "Did you remember to make it?" % _libname
-    raise ImportError(message)
+class CombineError(Exception):
+    """Error thrown to report any error codes returned when combining data.
+    """
+    def __init__(self, _errno, message=None):
+        self.errno = _errno
+        self.message = os.strerror(_errno) if message is None else message
+    
+    def __repr__(self):
+        return "CombineError(%i, %r)" % (self.errno, self.message)
 
-_typecodes = {
-    "float64" : 0xD,
-    "float32" : 0xF,
-    "int8" : 8,
-    "int16" : 16,
-    "int32" : 32,
-    "uint8" : 108,
-    "uint16" : 116
-}
+class FunctorFactoryError(Exception):
+    """Error thrown to indicate failure to construct a Functor.
+    """
+    def __init__(self, _errno, message=None):
+        self.errno = _errno
+        self.message = os.strerror(_errno) if message is None else message
+    
+    def __repr__(self):
+        return "BadFunctor(%i, %r)" % (self.errno, self.message)
 
-def _call(
-    original_args,
-    function,
-    sigma,
-    sigma_lower,
-    sigma_upper,
-    sigma_iter
-):
-    args = tuple(original_args)    
+class Functor(object):
+    """RAII object that manages a MediocreFunctor struct, calling its destructor
+    when the object gets deleted (or dispose is called).
+
+    Users should not create this object themselves. Rather, they should receive
+    this object from a factory function created with make_functor_factory.
+    """
+    __slots__ = ["_struct"]
     
-    if sigma is not None:
-        if sigma_iter is None:
-            sigma_iter = 10
-    else:
-        if sigma_iter is None:
-            sigma_iter = 0
-        sigma = 3.0
-    
-    if sigma_lower is None:
-        sigma_lower = sigma
-    if sigma_upper is None:
-        sigma_upper = sigma
-    if len(args) == 0:
-        raise ValueError("Need at least one array.")
-    if sigma_lower is None or sigma_lower < 1.0:
-        raise ValueError("sigma_lower needs to be at least 1.0")
-    if sigma_upper is None or sigma_upper < 1.0:
-        raise ValueError("sigma_upper needs to be at least 1.0")
-    
-    stride_arrays = np.empty(shape=(len(args), 5), dtype=c_void_p)
-    shape = None
-    
-    for i, a in enumerate(args):
-        if type(a) is not np.ndarray:
-            raise TypeError("Requires numpy.ndarray objects only")
+    def __init__(self, blob=None):
+        """Users should not be constructing Functor objects manually.
+        Construct an object that manages a struct_mediocre_functor.
+        There should never be two Functor objects managing the same
+        functor structure, otherwise the C MediocreFunctor struct will
+        eventually have its destructor called twice.
         
-        shape_len = len(a.shape)
-        if shape_len > 2:
-            raise TypeError("Arrays may be 1 or 2 dimensional only")
-        
-        if shape is None:
-            shape = a.shape
-        elif a.shape != shape:
-            raise TypeError("Arrays must have the same shape")
+        Checks whether the MediocreFunctor is good before managing it. If not,
+        destroy the bad Functor (nonzero_error != 0) and throw an exception.
+        """
+        if blob is None:
+            self._struct = None
+        elif type(blob) is struct_mediocre_functor:
+            self._struct = blob
+            if blob.nonzero_error != 0:
+                blob.destructor(blob.user_data)
+                self._struct = None
+                raise FunctorFactoryError(blob.nonzero_error)
+        else:
+            raise TypeError("Can only manage MediocreFunctor structs.")
+    
+    def __del__(self):
+        self.dispose()
+    
+    def dispose(self):
+        if self._struct is not None:
+            self._struct.destructor(self._struct.user_data)
+            self._struct = None
+    
+    def __nonzero__(self):
+        """Functor is truthy if it's managing an actual functor object, and can
+        be used for combining; false if it's not."""
+        return self._struct is not None
+    
+    # Only for 1D and 2D numpy arrays for now. XXX to document.
+    def __call__(
+        self, arrays, masks=None, nonzero_means_bad=True, thread_count=7
+    ):
+        if type(self._struct) is not _c.FunctorBlob:
+            if self._struct is None:
+                raise Exception("Functor not initialized.")
+            else:
+                raise AssertionError("Functor._struct has unexpected type.")
         
         try:
-            array_typecode = _typecodes[a.dtype.name]
-        except KeyError:
-            raise TypeError("Cannot use array of %s as argument" % a.dtype.name)
+            if len(arrays) == 0:
+                raise ValueError("Must have at least one array to combine")
+        except Exception as e:
+            raise TypeError("arrays must be a sequence type.\n"
+                "(arrays had no len because of %r)" % e)
         
-        stride_arrays[i] = [    # See strideloader.h for struct definition.
-            a.ctypes.data,      # Pointer to data
-            array_typecode,     # Array type code
-            a.shape[-1],        # Least-significant axis item count
-            a.strides[0],       # Most-significant axis stride (unused for 1D).
-            a.strides[-1],      # Least-significant axis stride
-        ]
-    
-    output = np.empty(shape=shape, dtype=np.float32, order="C")
-    
-    error_code = function(
-        output.ctypes.data_as(c_void_p),
-        stride_arrays.ctypes.data_as(c_void_p),
-        c_size_t(len(args)),
-        c_size_t(shape[0] * (shape[1] if len(shape) == 2 else 1)),
-        c_double(sigma_lower),
-        c_double(sigma_upper),
-        c_size_t(sigma_iter)
-    )
-    
-    if error_code == 0:
-        return output
-    elif error_code == errno.ENOMEM:
-        raise MemoryError
-    elif error_code == errno.EINVAL:
-        raise ValueError("Invalid argument. See console for possible details")
-    elif error_code == errno.ERANGE:
-        raise OverflowError
-    else:
-        raise Exception("%i %s" % (error_code, os.strerror(error_code)))
-
-def mean(
-    arrays,
-    sigma=None,
-    sigma_lower=None,
-    sigma_upper=None,
-    sigma_iter=None
-):
-    return _call(
-        arrays,
-        function=_lib.MediocrePy_clipped_mean,
-        sigma=sigma,
-        sigma_lower=sigma_lower,
-        sigma_upper=sigma_upper,
-        sigma_iter=sigma_iter
-    )
-
-def median(
-    arrays,
-    sigma=None,
-    sigma_lower=None,
-    sigma_upper=None,
-    sigma_iter=None
-):
-    return _call(
-        arrays,
-        function=_lib.MediocrePy_clipped_median,
-        sigma=sigma,
-        sigma_lower=sigma_lower,
-        sigma_upper=sigma_upper,
-        sigma_iter=sigma_iter
-    )
-
-def get_normalized(array):
-    flatdiv = np.median(array[500:1600, 1000:3500])
-    result = np.copy(array) / flatdiv
-    return result
-
-# Demo program for fits files with 4 4608 by 2048 chips (16 bit unsigned)
-def main():
-    import astropy.io.fits as fits
-    try:
-        output_name = sys.argv[1]
-        f = { "median": median, "mean": mean }[sys.argv[2]]
-        sigma_iter = { "median": 0, "mean": 10 }[sys.argv[2]]
-    except (IndexError, KeyError):
-        print>>sys.stderr, """Format:
-            [output filename] [mean|median] [input fits files...]"""
-        raise SystemExit
-    
-    hdu_lists = [fits.open(name) for name in sys.argv[3:]]
-    
-    combined_chips = [None] * 5
-    
-    for chipnum in xrange(1, 5):
-        chips = [get_normalized(lst[chipnum].data[0:4608, 0:2048]) for lst in hdu_lists]
+        expected_shape = arrays[0].shape
+        combine_count = len(arrays)
         
-        combined_chips[chipnum] = f(
-            chips, sigma_iter=sigma_iter
+        if masks is None:
+            mediocre_array = (_c.Mediocre2D * combine_count)()
+            for i, arr in enumerate(arrays):
+                mediocre_array[i] = _c.Mediocre2D(arr)
+                if arr.shape != expected_shape:
+                    raise TypeError("All arrays must have the same shape.")
+            
+            assert all(m2d.data for m2d in mediocre_array), "NULL POINTER!!!"
+            
+            first_dtype = arrays[0].dtype
+            
+            # Check if 1D homogeneous input is okay. We can treat 2D arrays as
+            # if they were 1D arrays if they are C contiguous.
+            can_use_1d_input = all(
+                arr.dtype == first_dtype and arr.flags["C_CONTIGUOUS"]
+                for arr in arrays
+            )
+            if not can_use_1d_input:
+                input_obj = _c.mediocre_2D_input(mediocre_array, combine_count)
+            else:
+                # Use faster 1D homogeneous input functions if able.
+                unused, input_factory, ptr_t = _c.np_type_dict[first_dtype.name]
+                pointer_array = (ptr_t * combine_count)()
+                for i, arr in enumerate(arrays):
+                    pointer_array[i] = arr.ctypes.data_as(ptr_t)
+                
+                width = expected_shape[0]
+                if len(expected_shape) == 2:
+                    width *= expected_shape[1]
+                
+                dim = Dimension(combine_count, width)
+                input_obj = input_factory(pointer_array, dim)
+                
+        else:       # We have masks
+            try:
+                if len(masks) != combine_count:
+                    raise ValueError("Need %i masks for %i arrays, have %i" %
+                        (combine_count, combine_count, len(masks)))
+            except Exception as e:
+                raise TypeError("masks must be a sequence type.\n"
+                "(masks had no len because of %r)" % e)
+            
+            mediocre_masked_array = (_c.Masked2D * combine_count)()
+            for i in xrange(combine_count):
+                arr = arrays[i]
+                mask = masks[i]
+                if arr.shape != expected_shape:
+                    raise TypeError("All arrays must have the same shape.")
+                if mask.shape != expected_shape:
+                    raise TypeError("Mask must have same shape as data array.")
+                mediocre_masked_array[i].data_2D = _c.Mediocre2D(arr)
+                mediocre_masked_array[i].mask_2D = _c.Mediocre2D(mask)
+            
+            nonzero_means_bad = bool(nonzero_means_bad)
+            input_obj = _c.masked_2D_input(
+                mediocre_masked_array, combine_count, nonzero_means_bad
+            )
+        
+        output = _np.empty(shape=expected_shape, dtype=_np.float32)
+        
+        status = _c.combine(
+            output.ctypes.data_as(_c.float_ptr),
+            input_obj._struct,
+            self._struct,
+            thread_count
         )
-    # Normalize the data based on the middle of the first extension???
-    flatdiv = np.median(combined_chips[1][500:1600, 1000:3500])
-    
-    for chipnum in xrange(1, 5):
-        combined_chips[chipnum] = combined_chips[chipnum] / flatdiv
-    
-    hdulist = fits.HDUList(
-        [fits.PrimaryHDU()] +
-        [fits.ImageHDU(combined_chips[i]) for i in xrange(1, 5)]
-    )
-    hdulist.writeto(output_name)
+        
+        if status != 0:
+            raise CombineError(status)
+        
+        return output
+ 
 
-if __name__ == "__main__":
-    main()
+def make_functor_factory(c_function, doc=None, no_argtypes=False):
+    if c_function.restype is not struct_mediocre_functor:
+        raise TypeError("C function must have restype=struct_mediocre_functor")
+    if c_function.argtypes is None and not no_argtypes:
+        raise TypeError("Must set argtypes of C function")
+    
+    def functor_factory(*args):
+        structure = c_function(*args)
+        return Functor(structure)
+    
+    functor_factory.__doc__ = doc
+    return functor_factory
+
+
+mean = Functor(_c._mean_functor())
+
+ClippedMean2 = make_functor_factory(_c._clipped_mean_functor2)
+
+def ClippedMean(sigma, max_iter):
+    return ClippedMean2(sigma, sigma, max_iter)
+
+clipped_mean = ClippedMean(3.0, 8)
+
+median = Functor(_c._median_functor())
+
+ClippedMedian2 = make_functor_factory(_c._clipped_median_functor2)
+
+def ClippedMedian(sigma, max_iter):
+    return ClippedMedian2(sigma, sigma, max_iter)
+
+clipped_median = ClippedMedian(3.0, 8)
+
+def scaled_mean(
+    scale_factors, arrays, masks=None, nonzero_means_bad=True, thread_count=7,
+    sigma=3.0, sigma_upper=None, sigma_lower=None, max_iter=8
+):
+    scale_factors = _np.array(scale_factors, _np.float32)
+    if len(scale_factors) != len(arrays):
+        raise TypeError("Need exactly as many scale_factors as arrays")
+    
+    if sigma_upper is None: sigma_upper = sigma
+    if sigma_lower is None: sigma_lower = sigma
+    
+    functor = Functor(_c._scaled_mean_functor2(
+        scale_factors.ctypes.data_as(_c.float_ptr),
+        len(scale_factors),
+        sigma_lower,
+        sigma_upper,
+        max_iter
+    ))
+    
+    return functor.combine(arrays, masks, nonzero_means_bad, thread_count)
+        
 

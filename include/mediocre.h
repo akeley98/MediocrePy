@@ -294,9 +294,9 @@ static inline void mediocre_functor_write_temp(
  *  of the arrays whose data is now  in  the  chunks  (combine_count  =  the
  *  number  of  arrays  =  the number of __m256 vectors in a chunk), and the
  *  coordinates of the data they want along the combine axis and  the  width
- *  axis, which specifies which array's data desired and the position within
- *  the array of the data desired,  respectively.  The  function  returns  a
- *  pointer to the float data requested.
+ *  axis,  which  specifies  which  array's data is desired and the position
+ *  within the array of the data desired, respectively. The function returns
+ *  a pointer to the float data requested.
  */
 static inline float* mediocre_chunk_ptr(
     __m256* chunks, size_t combine_count, size_t combine_axis, size_t width_axis
@@ -540,7 +540,7 @@ typedef struct mediocre_masked_2D {
  *  or  nonzero  entry  in  a  mask  array  specifies  a  bad  value  in the
  *  corresponding data array.
  */
-MediocreInput mediocre_2D_masked_input(
+MediocreInput mediocre_masked_2D_input(
     MediocreMasked2D const* masked_arrays,
     size_t count,
     int nonzero_means_bad
@@ -567,8 +567,8 @@ MediocreInput mediocre_2D_input(Mediocre2D const* arrays, size_t count);
  *  then use the c2d functions, not the f2d. Two wrongs make a right in that
  *  case. As mentioned, the Mediocre2D instance just borrows the pointer.
  *  
- *  For 2D arrays that are not packed (i.e. have gaps so  that  the  strides
- *  are  not  what  we'd  expect  for  either  C  or  Fortran  arrays), just
+ *  For 2D arrays that are not  contiguous  (i.e.  have  gaps  so  that  the
+ *  strides  are  not what we'd expect for either C or Fortran arrays), just
  *  initialize a Mediocre2D instance yourself with your pointer, the correct
  *  type code, and the major and minor widths and strides.
  */

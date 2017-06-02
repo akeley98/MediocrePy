@@ -405,8 +405,8 @@ mediocre_1D_input_impl(DataType const* const* pointers, MediocreDimension dim) {
                 static_cast<UserData const*>(user_data_pv)->ptr_vec.data();
             
             MEDIOCRE_INPUT_LOOP(command, control) {
-                size_t whole_vector_count = command.dimension.width / 8;
-                size_t remainder = command.dimension.width % 8;
+                const size_t whole_vector_count = command.dimension.width / 8;
+                const size_t remainder = command.dimension.width % 8;
                 
                 for (size_t i = 0; i < command.dimension.combine_count; ++i) {
                     // The subsection of the array that we are to load data
@@ -655,7 +655,7 @@ static void masked_user_data_destructor(void* user_data_pv) {
  *  array  can  be safely deleted after the function returns, as long as the
  *  data pointed to by those MediocreMasked2D objects remains valid.
  */
-MediocreInput mediocre_2D_masked_input(
+MediocreInput mediocre_masked_2D_input(
     MediocreMasked2D const* masked_arrays,
     size_t count,
     int nonzero_means_bad
@@ -672,7 +672,7 @@ MediocreInput mediocre_2D_masked_input(
     MaskedUserData* masked_user_data = nullptr;
     
     if (count == 0) {
-        fprintf(stderr, "mediocre_2D_masked_input:\n"
+        fprintf(stderr, "mediocre_masked_2D_input:\n"
             "count should not be zero (needs at least one input array).\n"
         );
         result.nonzero_error = EINVAL;
@@ -710,13 +710,13 @@ MediocreInput mediocre_2D_masked_input(
         result.user_data = masked_user_data;
     } catch (std::bad_alloc&) {
         fprintf(stderr,
-            "mediocre_2D_masked_input: Could not allocate memory.\n"
+            "mediocre_masked_2D_input: Could not allocate memory.\n"
         );
         result.nonzero_error = ENOMEM;
         delete masked_user_data;
         return result;
     } catch (...) {
-        fprintf(stderr, "mediocre_2D_masked_input: Unknown error.\n");
+        fprintf(stderr, "mediocre_masked_2D_input: Unknown error.\n");
         result.nonzero_error = -1;
         delete masked_user_data;
         return result;
