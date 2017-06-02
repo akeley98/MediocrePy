@@ -35,18 +35,21 @@ class FunctorFactoryError(Exception):
     """Error thrown to indicate failure to construct a Functor.
     """
     def __init__(self, _errno, message=None):
+        super(FunctorFactoryError, self).__init__(
+            os.strerror(_errno) if message is None else message
+        )
         self.errno = _errno
-        self.message = os.strerror(_errno) if message is None else message
-    
+        
     def __repr__(self):
-        return "BadFunctor(%i, %r)" % (self.errno, self.message)
+       return "FunctorFactoryError(%i, %r)" % (self.errno, self.message)
 
 class Functor(object):
-    """RAII object that manages a MediocreFunctor struct, calling its destructor
-    when the object gets deleted (or dispose is called).
+    """RAII object that manages a MediocreFunctor struct, calling its
+    destructor when the object gets deleted (or dispose is called).
 
-    Users should not create this object themselves. Rather, they should receive
-    this object from a factory function created with make_functor_factory.
+    Users should not create this object themselves. Rather, they should
+    receive this object from a factory function created with
+    make_functor_factory.
     """
     __slots__ = ["_struct"]
     
