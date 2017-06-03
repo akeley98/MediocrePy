@@ -80,8 +80,8 @@ static struct Random* generator;
 static struct timeb timer_begin;
 
 static const size_t max_offset = 15;           // Array can be offset to test
-static const size_t min_array_count =   1;     // for alignment bugs.
-static const size_t max_array_count = 600;
+static const size_t min_array_count = 1;       // for alignment bugs.
+static const size_t max_array_count = 601;
 static const size_t min_bin_count = 1;
 static const size_t max_bin_count = 600000;
 static const uint32_t min_max_iter = 0;

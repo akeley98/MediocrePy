@@ -60,8 +60,9 @@ class Functor(object):
         functor structure, otherwise the C MediocreFunctor struct will
         eventually have its destructor called twice.
         
-        Checks whether the MediocreFunctor is good before managing it. If not,
-        destroy the bad Functor (nonzero_error != 0) and throw an exception.
+        Checks whether the MediocreFunctor is good before managing it. If
+        not, destroy the bad Functor (nonzero_error != 0) and
+        throw an exception.
         """
         if blob is None:
             self._struct = None
@@ -87,7 +88,6 @@ class Functor(object):
         be used for combining; false if it's not."""
         return self._struct is not None
     
-    # Only for 1D and 2D numpy arrays for now. XXX to document.
     def __call__(
         self, arrays, masks=None, nonzero_means_bad=True, thread_count=7
     ):
@@ -112,7 +112,7 @@ class Functor(object):
             for i, arr in enumerate(arrays):
                 mediocre_array[i] = _c.Mediocre2D(arr)
                 if arr.shape != expected_shape:
-                    raise TypeError("All arrays must have the same shape.")
+                    raise IndexError("All arrays must have the same shape.")
             
             assert all(m2d.data for m2d in mediocre_array), "NULL POINTER!!!"
             
@@ -143,7 +143,7 @@ class Functor(object):
         else:       # We have masks
             try:
                 if len(masks) != combine_count:
-                    raise ValueError("Need %i masks for %i arrays, have %i" %
+                    raise IndexError("Need %i masks for %i arrays, have %i" %
                         (combine_count, combine_count, len(masks)))
             except Exception as e:
                 raise TypeError("masks must be a sequence type.\n"
@@ -154,9 +154,9 @@ class Functor(object):
                 arr = arrays[i]
                 mask = masks[i]
                 if arr.shape != expected_shape:
-                    raise TypeError("All arrays must have the same shape.")
+                    raise IndexError("All arrays must have the same shape.")
                 if mask.shape != expected_shape:
-                    raise TypeError("Mask must have same shape as data array.")
+                    raise IndexError("Mask must have same shape as data array.")
                 mediocre_masked_array[i].data_2D = _c.Mediocre2D(arr)
                 mediocre_masked_array[i].mask_2D = _c.Mediocre2D(mask)
             
@@ -232,5 +232,4 @@ def scaled_mean(
     ))
     
     return functor.combine(arrays, masks, nonzero_means_bad, thread_count)
-        
 

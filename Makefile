@@ -1,9 +1,9 @@
 MYFLAGS = -g -mavx -D_POSIX_C_SOURCE=201112L -Wall -Wextra -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=implicit-function-declaration -Wno-missing-field-initializers
 
+# Change these commands if you want to change the C and C++ compilers.
 CC = clang $(MYFLAGS) -fPIC -O2 -S -std=c99 -I include -I src/inline
 CC4 = clang $(MYFLAGS) -fPIC -O3 -S -std=c99 -I include -I src/inline
 Cxx = clang++ $(MYFLAGS) -fPIC -O2 -S -std=c++11 -I include -I src/inline
-
 LinkLib = clang++ -fPIC -lm -lpthread -shared
 LinkTest = clang++ -lpthread
 
@@ -18,7 +18,7 @@ bin/mediocre.so: bin/combine.s bin/input.s bin/mean.s bin/median.s
 bin/combine.s: src/combine.c include/mediocre.h
 	$(CC) src/combine.c -o bin/combine.s
 	
-# bin/input.s takes up like 90% of the compile time and 90% of the space in the # final .so file., but I NEED the delicious C++ templates!
+# bin/input.s takes up like 90% of the compile time and 90% of the space in the # final .so file, but I NEED the delicious C++ templates!
 bin/input.s: src/input.cc include/mediocre.h
 	$(Cxx) src/input.cc -o bin/input.s
 
