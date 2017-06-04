@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/timeb.h>
 
 #include "mediocre.h"
 #include "testing.h"

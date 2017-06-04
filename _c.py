@@ -41,6 +41,32 @@ except Exception as err:
         % err
     )
 
+# Actually these 2 errors classes are fine for use by users. I just moved
+# them here because I'm fed up with them spamming up the docstrings.
+class CombineError(Exception):
+    """Error thrown to report any error codes returned when combining data.
+    """
+    def __init__(self, _errno, message=None):
+        super(CombineError, self).__init__(
+            os.strerror(_errno) if message is None else message
+        )
+        self.errno = _errno
+    
+    def __repr__(self):
+        return "CombineError(%i, %r)" % (self.errno, self.message)
+
+class FunctorFactoryError(Exception):
+    """Error thrown to indicate failure to construct a Functor.
+    """
+    def __init__(self, _errno, message=None):
+        super(FunctorFactoryError, self).__init__(
+            os.strerror(_errno) if message is None else message
+        )
+        self.errno = _errno
+        
+    def __repr__(self):
+       return "FunctorFactoryError(%i, %r)" % (self.errno, self.message)
+
 class Dimension(Structure):
     """MediocreDimension structure (combine_count, width)"""
     _fields_ = [("combine_count", c_size_t), ("width", c_size_t)]
@@ -161,7 +187,7 @@ class Mediocre2D(Structure):
         try:
             type_code, ignored, ignored2 = np_type_dict[arr.dtype.name]
         except KeyError:
-            raise TypeError("Unknown numpy array dtype %r" % arr.dtype.name)
+            raise TypeError("Unknown numpy array dtype %r" % (arr.dtype.name,))
         
         shape = arr.shape
         strides = arr.strides
@@ -180,7 +206,7 @@ class Mediocre2D(Structure):
             self.minor_width = shape[1]
             self.minor_stride = strides[1]
         else:
-            raise TypeError("Array must be 1D or 2D. shape=%r" % arr.shape)
+            raise TypeError("Array must be 1D or 2D. shape=%r" % (arr.shape,))
 
 
 class Masked2D(Structure):

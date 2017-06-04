@@ -1,20 +1,22 @@
-# mediocre and MediocrePy (Work in progress! The documentation describes a library that does not yet fully exist)
+# mediocre and MediocrePy
 
-An aggressively average SIMD combine library (single-precision float array averages with sigma clipping), and a python 2 interface for it. The library includes the mean, median, and sigma-clipped mean combine algorithms, can handle 1-or-2 dimensional input arrays (including Fortran order and non-contiguous arrays) of any primitive data type (8/16/32/64 bit signed/unsigned integer, 32/64 bit float), and is designed with parallelism and extensibility in mind.
+An aggressively average SIMD combine library (single-precision float array averages with sigma clipping), and a python 2 interface for it. The library includes the mean, median, and sigma-clipped mean array combine algorithms, can handle 1-or-2 dimensional input arrays (including Fortran order and non-contiguous arrays) of any primitive data type (8/16/32/64 bit signed/unsigned integer, 32/64 bit float), and is designed with parallelism and extensibility in mind.
 
 ## Building
 
-I provided a makefile that uses clang as the C and C++ compiler. I used `clang version 3.8.0-2ubuntu4 (tags/RELEASE_380/final)` in development. You can change the compiler in the makefile, but this program is not exactly the most portable program: if you switch the compiler, be aware that the program uses Intel compiler style intrinsics (`__mm256_frobnicate_epu64`). Also, this program depends on `pthread` and `posix_memalign`. It's not designed with non-Unix systems in mind. Running `make` in the root directory for the project should create the library `bin/mediocre.so` for the project.
+I provided a makefile that uses clang as the C and C++ compiler. I used `clang version 3.8.0-2ubuntu4 (tags/RELEASE_380/final)` in development. You can change the compiler in the makefile, but this program is not exactly the most portable program: if you switch the compiler, be aware that the program uses Intel compiler style intrinsics (`__mm256_frobnicate_epu32`). Also, this program depends on `pthread` and `posix_memalign`. It's not designed with non-Unix systems in mind. Running `make` in the root directory for the project should create the library `bin/mediocre.so` for the project.
 
 There's only one header file for C programs for this library: `include/mediocre.h`. Feel free to link in the four files `bin/mean.s bin/median.s bin/input.s bin/combine.s` if you don't want to depend on a `.so` library.
 
-If you are planning to use this library in a Python program, first build the library (run `make` from the terminal in the root directory for the project), then copy the entire directory into your project. The root directory serves as the module's directory (i.e., `import MediocrePy` should work when run in the directory that holds the root directory that you just copied). This README describes the purpose and usage of the library mainly from a C programmer's perspective: the Python documentation is provided in docstrings of the Python module. I used `Python 2.7.12 (default, Nov 19 2016, 06:48:10) [GCC 5.4.0 20160609] on linux2` and `numpy 1.11.0` in development. My choice of Python 2 over Python 3 is my small contribution to the greater fad in America to take pride in one's political incorrectness `;-)`. Really, though, for now it still seems that Python 2 is eating Python 3's lunch in the _real world_, but it shouldn't be all that hard to port to Python 3 if/when needed since only a very small part of the library is written in Python, and the library does zero str/unicode processing.
+If you are planning to use this library in a Python program, first build the C library (run `make` from the terminal in the root directory for the project), then copy the entire directory into your project. The root directory serves as the module's directory (i.e., `import MediocrePy` should work when run in the directory that holds the root directory that you just copied). This README describes the purpose and usage of the library mainly from a C programmer's perspective: the Python documentation is provided in docstrings of the Python module. I used `Python 2.7.12 (default, Nov 19 2016, 06:48:10) [GCC 5.4.0 20160609] on linux2` and `numpy 1.11.0` (required dependency) in development. My choice of Python 2 over Python 3 is my small contribution to the greater fad in America to take pride in one's political incorrectness `;-)`. Really, though, for now it still seems that Python 2 is eating Python 3's lunch in the _real world_, but it shouldn't be all that hard to port to Python 3 if/when needed since only a very small part of the library is written in Python, and the library does zero str/unicode processing.
 
 ## First, a word of warning
 
 Internally, the library uses 256-bit single precision floating point vectors everywhere. This will require the AVX instruction set, introduced in 2011 (Sandy Bridge or later for Intel, Bulldozer or later for AMD, I think). If your computer has a CPU older than this, it won't be able to run this code (not because the CPU is too slow, but because it won't understand the instructions used in the program. It would be like reading Dr. Seuss to your goldfish). Computers with crippled Intel processors (Celerons and Pentiums) also won't be able to run the code, because Intel are run by losers who will happily hold back the march of progress in order to make an extra buck. If you wanted an inexpensive CPU that was actually good, you should have bought an AMD. Not that I only have good things to say about AMD. It turns out that their FX processors have a bug that can slow vectorized memory access down by something like 10000%, so this code may not perform as well as I'd hoped on those processors. At least Zen's here to save us from 5 years of faildozer.
 
 Keep in mind that compilers are often no help when it comes to memory alignment for such vector data types, so be vigilant. If you are a user of the library just looking to use the default combine and input methods, you don't have to worry about alignment all that much.
+
+Please be cautious when using this library on overclocked computers or poorly-cooled laptops! AVX instructions are known to produce more heat than typical instructions. A computer that appears stable because it can handle "100%" CPU load may have latent instability revealed by a program like this one, which really comes much closer to using 100% of the CPU. Just because your overclocked rig runs Overwatch at 1440p just fine doesn't mean that it really is a stable computer.
 
 ## Introduction (skip to here when you tire of reading the warning!)
 
@@ -27,7 +29,7 @@ This library was written to solve the problem of writing high-performance combin
         
         output : a0, a1, a2, a3, a4, a5
     
-where `a0` is `f(w0, x0, y0, z0)`, `a1` is `f(w1, x1, y1, z1)`, and so on. Here, we say that `combine_count` is 4 (because we are combining 4 input arrays into a single output array) and that `width` is 6 (because each array is 6 entries wide). I tend to refer to a group of numbers that is combined into a single value in the output as a 'column' of data.
+where `a0` is `f(w0, x0, y0, z0)`, `a1` is `f(w1, x1, y1, z1)`, and so on. `f` could be the mean function, median function, or some more sophisticated function. Here, we say that `combine_count` is 4 (because we are combining 4 input arrays into a single output array) and that `width` is 6 (because each array is 6 entries wide). I tend to refer to a group of numbers that is combined into a single value in the output as a 'column' of data.
 
 This library aims to solve this combine problem (for single precision, 32 bit floats) by doing two things: first, by providing a collection of default input functions and high-performance combine functions , and second, by providing an interface through which programmers can implement their own vectorized combine and input functions that are compatible with those provided by the library. The library specifies a chunk format, which is how the input and combine functions communicate with each other.
 
@@ -118,9 +120,9 @@ Now I will describe the terrifying chunk format that I've been hinting at for so
         
 In words, a group of input arrays is converted to chunk format by packing 8 columns of the input arrays at a time into a chunk. Each chunk consists of `combine_count __m256` vectors, with each vector holding 8 entries from exactly one of the input arrays. Chunk `N` holds data from columns `N*8` to `N*8 + 7`, with vector `V` of the chunk holding input from input array `V`. Extra entries in the vectors of the last chunk should be filled with `0`'s (although I suppose it would be unwise to rely on this requirement).
 
-    BTW, `_mm256_set_ps` has its arguments in backwards order for some reason.
+        BTW, _mm256_set_ps has its arguments in backwards order for some reason.
 
-The chunk format is a bit confusing because it's neither row-major nor column-major. Instead it's sort of this 3D layout where both the most and least significant dimensions correspond to the width axis. It'll make more sense once I explain the reason it's designed this way: it makes it possible for vectorized combine algorithms to combine 8 columns of data at a time while reading as small a portion of memory as possible. You can see how easily chunk 0 can be combined into the output `[a0, a1, a2, a3, a4, a5, a6, a7]`, and how chunk 1 can be combined into `[a8, a9, a10, 0, 0, 0, 0, 0]`. A vectorized combine algorithm can calculate 8 results at a time (1 for each lane of the 8 lanes in a vector) just by reading in `combine_count` vectors at a time (4 in this case), with all computation for a single column of data confined to a single lane of a vector. The functions `mediocre_chunk_ptr` and `mediocre_chunk_data` may be helpful for dealing with the chunk format: they let you index chunk data more-or-less like it were normal 2D array.
+The chunk format is a bit confusing because it's neither row-major nor column-major. Instead it's sort of this 3D layout where both the most and least significant dimensions correspond to the width axis. It'll make more sense once I explain the reason it's designed this way: it makes it possible for vectorized combine algorithms to combine 8 columns of data at a time while reading as small a portion of memory as possible. You can see how easily chunk 0 can be combined into the output `[a0, a1, a2, a3, a4, a5, a6, a7]`, and how chunk 1 can be combined into `[a8, a9, a10, 0, 0, 0, 0, 0]`. A vectorized combine algorithm can calculate 8 results at a time (1 for each lane of the 8 lanes in a vector) just by reading in `combine_count` vectors at a time (4 in this case), with all computation for a single column of data confined to a single lane of a vector. The functions `mediocre_chunk_ptr` and `mediocre_chunk_data` may be helpful for dealing with the chunk format: they let you index chunk data more-or-less like it were a normal 2D array.
 
 A MediocreInput instance will be tasked with converting data into chunk format. You may wish to implement a new kind of MediocreInput in order to allow the library to process new kinds of arrays, with the work of loading data from arrays being done in parallel with the combine work, rather than strictly before the combine work (as would occur if you converted those arrays to a format already known to the library before calling `mediocre_combine` - a totally valid solution if it is acceptably efficient).
 
@@ -128,9 +130,9 @@ A MediocreFunctor instance will be tasked with combining data in chunk format. Y
 
 As an aspiring MediocreInput or MediocreFunctor implementor, you will write a factory function that will return 5 or 4 things to the user through a MediocreInput or MediocreFunctor structure:
 
-A loop function that will poll for and execute commands given by the mediocre library. It should return nonzero if it encounters an error and zero if it is successful. I'll explain the structure and requirements on this function later.
+A loop function that will poll for and execute commands (load or combine data) given by the mediocre library. It should return nonzero if it encounters an error and zero if it is successful. I'll explain the structure and requirements on this function later. For now just know that this is where most of the behavior for your new input or combine algorithm will be implemented.
 
-A void pointer to "user data", which holds data you need to do your job. This pointer will be passed to and should be cast to the actual type of the user data in the functions that you implement.
+A void pointer to "user data", which holds data you need to do your job. This could be, for example, a structure of arguments that customize the behavior of your algorithm (e.g., for the library's sigma-clipped algorithms, user_data stores sigma bounds and maximum iterations). This pointer will be passed to and should be cast to the actual type of the user data in the functions that you implement.
 
 A destructor function that frees resources held by the user data. This is what gets called by `mediocre_input_destroy` and `mediocre_functor_destroy`. The prototype matches the prototype of `free`, so `free` can be used as the destructor if the only resource held by the user data is the memory it occupies.
 
@@ -139,6 +141,7 @@ An error code that should be nonzero if the factory function failed to properly 
 Finally, MediocreInput instances also store the dimension of the input as a MediocreDimension structure. This will most likely just be copied from whatever the user specified.
 
 Prototypes and structure layouts:
+
         int MediocreInput.loop_function(MediocreInputControl*, void const*, MediocreDimension)
         int MediocreFunctor.loop_function(MediocreFunctorControl*, void const*, MediocreDimension)
         
@@ -166,7 +169,7 @@ The mediocre library provides `MediocreInputCommand` and `MediocreFunctorCommand
         MediocreFunctorCommand command;
         MEDIOCRE_FUNCTOR_LOOP(command, control_struct) {
             execute_command(command);
-            if (disaster) return error_code
+            if (disaster) return error_code;
         }
 
 You can break or return out of the loop, and can continue to the next command, just like in an ordinary for loop (because the macro _is_ a for statement).

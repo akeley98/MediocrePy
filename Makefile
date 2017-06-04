@@ -1,4 +1,4 @@
-MYFLAGS = -g -mavx -D_POSIX_C_SOURCE=201112L -Wall -Wextra -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=implicit-function-declaration -Wno-missing-field-initializers
+MYFLAGS = -mavx -D_POSIX_C_SOURCE=201112L -Wall -Wextra -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=implicit-function-declaration -Wno-missing-field-initializers
 
 # Change these commands if you want to change the C and C++ compilers.
 CC = clang $(MYFLAGS) -fPIC -O2 -S -std=c99 -I include -I src/inline
@@ -32,17 +32,23 @@ bin/median.s: src/median.c include/mediocre.h src/inline/sigmautil.h
 
 bin/testing.s: src/testing.cc
 	$(Cxx) src/testing.cc -o bin/testing.s
-
-tests/bin/mean_test.s: tests/mean_test.c include/mediocre.h src/inline/testing.h
-	$(CC) tests/mean_test.c -o tests/bin/mean_test.s
 	
-tests/bin/median_test.s: tests/median_test.c include/mediocre.h src/inline/testing.h
-	$(CC) tests/median_test.c -o tests/bin/median_test.s
-
-tests/bin/mean_test: tests/bin/mean_test.s bin/combine.s bin/mean.s bin/testing.s
-	$(LinkTest) tests/bin/mean_test.s bin/combine.s bin/mean.s bin/testing.s -o tests/bin/mean_test
+bin/input_test.s: tests/input_test.cc include/mediocre.h include/mediocre.hpp src/inline/testing.h
+	$(Cxx) tests/input_test.cc -o bin/input_test.s
 	
-tests/bin/median_test: tests/bin/median_test.s bin/combine.s bin/median.s bin/testing.s
-	$(LinkTest) tests/bin/median_test.s bin/combine.s bin/median.s bin/testing.s -o tests/bin/median_test
+bin/mean_test.s: tests/mean_test.c include/mediocre.h src/inline/testing.h
+	$(CC) tests/mean_test.c -o bin/mean_test.s
+	
+bin/median_test.s: tests/median_test.c include/mediocre.h src/inline/testing.h
+	$(CC) tests/median_test.c -o bin/median_test.s
+	
+bin/input_test: bin/input_test.s bin/combine.s bin/input.s bin/mean.s bin/testing.s
+	$(LinkTest) bin/input_test.s bin/combine.s bin/input.s bin/mean.s bin/testing.s -o bin/input_test
+	
+bin/mean_test: bin/mean_test.s bin/combine.s bin/mean.s bin/testing.s
+	$(LinkTest) bin/mean_test.s bin/combine.s bin/mean.s bin/testing.s -o bin/mean_test
+	
+bin/median_test: bin/median_test.s bin/combine.s bin/median.s bin/testing.s
+	$(LinkTest) bin/median_test.s bin/combine.s bin/median.s bin/testing.s -o bin/median_test
 	
 	

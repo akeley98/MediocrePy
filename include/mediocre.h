@@ -332,12 +332,13 @@ MediocreFunctor mediocre_mean_functor();
 
 /*  Factory function that returns a  MediocreFunctor  that  combines  arrays
  *  using  the  sigma  clipped  mean algorithm. The algorithm performs up to
- *  max_iter iterations of sigma clipping to clip out outliers, and  returns
- *  the mean of those numbers in a column that were not clipped out. In each
- *  iteration of sigma clipping,  the  mean  and  standard  deviation  of  a
- *  column's  numbers  that were not clipped out are calculated, and numbers
- *  in that column that were more than sigma_upper standard deviations above
- *  or sigma_lower standard deviations below the mean are clipped out.
+ *  max_iter iterations of sigma clipping  to  clip  out  outliers  in  each
+ *  column  of  data, and returns the mean of those numbers in a column that
+ *  were not clipped out. In each iteration of sigma clipping, the mean  and
+ *  standard  deviation  of a column's numbers that were not clipped out are
+ *  calculated, and numbers in that column that were more  than  sigma_upper
+ *  standard  deviations  above or sigma_lower standard deviations below the
+ *  mean are clipped out.
  */
 MediocreFunctor mediocre_clipped_mean_functor2(
     double sigma_lower, double sigma_upper, size_t max_iter
@@ -394,9 +395,9 @@ static inline MediocreFunctor mediocre_scaled_mean_functor(
 /*  Factory functions for returning MediocreFunctor instances  that  combine
  *  arrays  by  taking  the median of each column of data. Sigma clipping is
  *  performed in a  similar  fashion  as  in  the  clipped  mean  algorithm:
- *  outliers  are defined as quantities more than sigma_upper*sigma above or
- *  more than sigma_lower*sigma below the median of numbers not clipped out,
- *  where  sigma is defined as the standard deviation from the median (i.e.,
+ *  outliers  are defined as quantities more than sigma_upper * SD" above or
+ *  more than sigma_lower * SD" below the median of numbers not clipped out,
+ *  where   SD"  is defined as the standard deviation from the median (i.e.,
  *  the standard deviation of the remaining  numbers  calculated  using  the
  *  median  where  the  mean would usually be used in the standard deviation
  *  formula.
@@ -583,7 +584,7 @@ static inline Mediocre2D as_mediocre_2D_i8_f2d(
     int8_t const* ptr, size_t rows, size_t columns
 ) {
     size_t sz = sizeof(int8_t);
-    Mediocre2D result = {ptr, 8, columns, sz, rows, columns*sz};
+    Mediocre2D result = {ptr, 8, rows, sz, columns, rows*sz};
     return result;
 }
 static inline Mediocre2D as_mediocre_2D_i8(
@@ -604,7 +605,7 @@ static inline Mediocre2D as_mediocre_2D_i16_f2d(
     int16_t const* ptr, size_t rows, size_t columns
 ) {
     size_t sz = sizeof(int16_t);
-    Mediocre2D result = {ptr, 16, columns, sz, rows, columns*sz};
+    Mediocre2D result = {ptr, 16, rows, sz, columns, rows*sz};
     return result;
 }
 static inline Mediocre2D as_mediocre_2D_i16(
@@ -625,7 +626,7 @@ static inline Mediocre2D as_mediocre_2D_i32_f2d(
     int32_t const* ptr, size_t rows, size_t columns
 ) {
     size_t sz = sizeof(int32_t);
-    Mediocre2D result = {ptr, 32, columns, sz, rows, columns*sz};
+    Mediocre2D result = {ptr, 32, rows, sz, columns, rows*sz};
     return result;
 }
 static inline Mediocre2D as_mediocre_2D_i32(
@@ -646,7 +647,7 @@ static inline Mediocre2D as_mediocre_2D_i64_f2d(
     int64_t const* ptr, size_t rows, size_t columns
 ) {
     size_t sz = sizeof(int64_t);
-    Mediocre2D result = {ptr, 64, columns, sz, rows, columns*sz};
+    Mediocre2D result = {ptr, 64, rows, sz, columns, rows*sz};
     return result;
 }
 static inline Mediocre2D as_mediocre_2D_i64(
@@ -667,7 +668,7 @@ static inline Mediocre2D as_mediocre_2D_u8_f2d(
     uint8_t const* ptr, size_t rows, size_t columns
 ) {
     size_t sz = sizeof(uint8_t);
-    Mediocre2D result = {ptr, 108, columns, sz, rows, columns*sz};
+    Mediocre2D result = {ptr, 108, rows, sz, columns, rows*sz};
     return result;
 }
 static inline Mediocre2D as_mediocre_2D_u8(
@@ -688,7 +689,7 @@ static inline Mediocre2D as_mediocre_2D_u16_f2d(
     uint16_t const* ptr, size_t rows, size_t columns
 ) {
     size_t sz = sizeof(uint16_t);
-    Mediocre2D result = {ptr, 116, columns, sz, rows, columns*sz};
+    Mediocre2D result = {ptr, 116, rows, sz, columns, rows*sz};
     return result;
 }
 static inline Mediocre2D as_mediocre_2D_u16(
@@ -709,7 +710,7 @@ static inline Mediocre2D as_mediocre_2D_u32_f2d(
     uint32_t const* ptr, size_t rows, size_t columns
 ) {
     size_t sz = sizeof(uint32_t);
-    Mediocre2D result = {ptr, 132, columns, sz, rows, columns*sz};
+    Mediocre2D result = {ptr, 132, rows, sz, columns, rows*sz};
     return result;
 }
 static inline Mediocre2D as_mediocre_2D_u32(
@@ -730,7 +731,7 @@ static inline Mediocre2D as_mediocre_2D_u64_f2d(
     uint64_t const* ptr, size_t rows, size_t columns
 ) {
     size_t sz = sizeof(uint64_t);
-    Mediocre2D result = {ptr, 164, columns, sz, rows, columns*sz};
+    Mediocre2D result = {ptr, 164, rows, sz, columns, rows*sz};
     return result;
 }
 static inline Mediocre2D as_mediocre_2D_u64(
@@ -751,7 +752,7 @@ static inline Mediocre2D as_mediocre_2D_float_f2d(
     float const* ptr, size_t rows, size_t columns
 ) {
     size_t sz = sizeof(float);
-    Mediocre2D result = {ptr, 0xf, columns, sz, rows, columns*sz};
+    Mediocre2D result = {ptr, 0xf, rows, sz, columns, rows*sz};
     return result;
 }
 static inline Mediocre2D as_mediocre_2D_float(
@@ -772,7 +773,7 @@ static inline Mediocre2D as_mediocre_2D_double_f2d(
     double const* ptr, size_t rows, size_t columns
 ) {
     size_t sz = sizeof(double);
-    Mediocre2D result = {ptr, 0xd, columns, sz, rows, columns*sz};
+    Mediocre2D result = {ptr, 0xd, rows, sz, columns, rows*sz};
     return result;
 }
 static inline Mediocre2D as_mediocre_2D_double(
