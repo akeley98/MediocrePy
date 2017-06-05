@@ -205,6 +205,10 @@ A complete MediocreInput.loop_function implementation will look something like t
             
             MediocreInputCommand command;
             MEDIOCRE_INPUT_LOOP(command, control) {
+                if (something_is_wrong()) {
+                    return nonzero_error_code();
+                }
+                
                 size_t offset = command.offset;
                 
                 // Method 1 (treating output as 2D array using mediocre_chunk_ptr)
@@ -239,14 +243,19 @@ A complete MediocreInput.loop_function implementation will look something like t
                     }
                 }
             }
+            return 0;
+        }
             
 The `MediocreInputCommand` you receive in each iteration contains three pertinent variables: the `dimension` of the request, the `offset` into the arrays that your are expected to load from, and the location you are expected to write input in chunk format to: `output_chunks`.
 
 Each time a command is received, the input loop function should load columns `offset` to `offset + dimension.width - 1` of the input arrays into the `__m256` array `output_chunks`. The columns should be loaded in chunk format, with chunk 0 corresponding to columns `offset` to `offset + 7`, chunk 1 corresponding to `offset + 8` to `offset + 15`, and so on (see above for chunk format).
 
 `offset` will always be divisible by 8.
+
 `dimension.combine_count` equals `maximum_request.combine_count`
+
 `dimension.width` will not exceed `maximum_request.width`. It might not be divisible by 8.
+
 `output_chunks` points to 32-byte aligned storage large enough to store the number of chunks requested (`ceil(dimension.width / 8)`).
 
 The loop function will be run one one thread only: the one that called `mediocre_combine`. This should simplify dealing with locked data structures, but means that the input function may be a bottleneck.
@@ -258,11 +267,14 @@ The loop function will be run one one thread only: the one that called `mediocre
 The command supplied each iteration specifies a `dimension`, `input_chunks`, and an `output` pointer. The chunks hold data from `dimension.width` columns of data. Each column `N` should be combined with its data written to `output[N]`. As mentioned earlier, this can be done by combining 8 columns at a time and writing 8 outputs at a time by combining one chunk of data at a time. But, there is a catch that I will mention shortly.
 
 `dimension.combine_count` equals `maximum_request.combine_count`.
+
 `dimension.width` will not exceed `maximum_request.width`.
+
 `input_chunks` points to 32-byte aligned storage that stores the number of chunks needed to store the columns of data you are to combine (`ceil(dimension.width / 8)`.
+
 `output` points to an array of floats wide enough to store `dimension.width` floats.
 
-There are few guarantees on the `output` pointer because it directly points to a portion of the output array passed by the caller of `mediocre_combine`, and we place few constraints on the caller of `mediocre_combine`. Notice that `output` may not be aligned to 32 bytes and it is only wide enough to store `dimension.width` floats, which may not be divisible by 8. Thus, even if you write the output vectors using unaligned store instructions, you still run the risk of overflowing the buffer. If you're writing a combine functor, the functions `mediocre_functor_aligned_temp` and `mediocre_functor_write_temp` are your new best friends. Call `mediocre_functor_aligned_temp` with the command received and a pointer to your control structure in order to received an `__m256` pointer that points to 32 byte aligned storage wide enough to store `ceil(command.dimension.width / 8) __m256` vectors. You can then safely write your output to this temporary array using `__m256` pointers. Just remember to call `mediocre_functor_write_temp` to copy the temporary buffer to the real output pointer.
+There are few guarantees on the `output` pointer because it directly points to a portion of the output array passed by the caller of `mediocre_combine`, and we place few constraints on the caller of `mediocre_combine`. Notice that `output` may not be aligned to 32 bytes and it is only wide enough to store `dimension.width` floats, which may not be divisible by 8. Thus, even if you write the output vectors using unaligned store instructions, you still run the risk of overflowing the buffer. If you're writing a combine functor, the functions `mediocre_functor_aligned_temp` and `mediocre_functor_write_temp` are your new best friends. Call `mediocre_functor_aligned_temp` with the command received and a pointer to your control structure in order to received an `__m256` pointer that points to 32 byte aligned storage wide enough to store `ceil(command.dimension.width / 8) __m256` vectors. You can then safely write your output to this temporary array using `__m256` pointers. Just remember to call `mediocre_functor_write_temp` to copy the temporary buffer to the real output pointer. You should check for a NULL result from `mediocre_functor_aligned_temp`, and MUST NOT free the memory received.
 
 `mediocre_combine` will call your loop function once for each thread that it launches. The combine work will be split among the different threads. It is very important then that the loop function is thread safe.
 
