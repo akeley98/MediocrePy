@@ -441,6 +441,12 @@ def test_clipped_median(shape1D, shape2D, combine_count, dtype, sigma_data):
     compare_2D(arrays2D, actual, expected)
 
 def main():
+    print """
+\x1b[32m\x1b[1mNOTE:\x1b[0m
+These tests are not representative of the speed of the mediocre library
+(implemented in C). The library's results are being compared to results
+calculated using pure Python. Calculating these Python results takes up
+almost all of the testing time.\n"""
     global seed, rand
     while 1:
         seed = hash(os.urandom(8))
@@ -448,8 +454,8 @@ def main():
         
         print "Seed = ", seed
         
-        shape1D = (rand.randrange(600000, 800000),)
-        shape2D = (rand.randrange(200, 300), rand.randrange(200, 300))
+        shape1D = (rand.randrange(40000, 70000),)
+        shape2D = (rand.randrange(180, 240), rand.randrange(200, 300))
         combine_count = rand.randrange(8, 24)
         dtype = rand.choice((
             None,None,None,None,None,None,None,None,None,None,
