@@ -1,4 +1,7 @@
-# All combine algorithms implemented in C are reimplemented here in Python
+# An aggresively average SIMD combine library
+# Copyright (C) 2017 David Akeley
+# 
+# All combine algorithms implemented in C are reimplemented here in Python.
 # We will test the combine functions (and 5x5 median filter) here by comparing
 # the mediocre library results with the Python results. The results won't
 # match perfectly because the C library uses single precision while Python is
@@ -7,8 +10,26 @@
 # combine algorithms are 'chaotic', that is, small rounding differences can 
 # have a big influence on the output since it could be the difference between
 # including and excluding a borderline outlier. Because of this, this program
-# doesn't fail a test if there aren't too many errors; it just flags those
+# allows a few errors to occur before failing a test; it just flags those
 # errors for review.
+# 
+# NOTE THAT THE Python implementations are REALLY slow. This means that we
+# aren't really testing the speed of the MediocrePy module nor are we testing
+# it with as much different data as we could. The library also includes tests
+# written in C that should be faster (but won't test the Python functionality).
+# 
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import sys
 import os
@@ -427,8 +448,8 @@ def main():
         
         print "Seed = ", seed
         
-        shape1D = (rand.randrange(10000, 20000),)
-        shape2D = (rand.randrange(50, 120), rand.randrange(50, 120))
+        shape1D = (rand.randrange(600000, 800000),)
+        shape2D = (rand.randrange(200, 300), rand.randrange(200, 300))
         combine_count = rand.randrange(8, 24)
         dtype = rand.choice((
             None,None,None,None,None,None,None,None,None,None,
@@ -444,8 +465,8 @@ def main():
         test_mean(shape1D, shape2D, combine_count, dtype)
         test_median(shape1D, shape2D, combine_count, dtype)
         
-        shape1D = (rand.randrange(3000, 4000),)
-        shape2D = (rand.randrange(50, 70), rand.randrange(50, 70))
+        shape1D = (rand.randrange(6000, 8000),)
+        shape2D = (rand.randrange(70, 95), rand.randrange(70, 95))
         
         test_clipped_mean(shape1D, shape2D, combine_count, dtype, sigma_data)
         test_scaled_mean(shape1D, shape2D, combine_count, dtype, sigma_data)

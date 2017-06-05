@@ -1,6 +1,9 @@
 /*  An aggresively average SIMD combine library.
  *  Copyright (C) 2017 David Akeley
  *  
+ *  This file implements the mediocre_combine function and the  API  for
+ *  MediocreInput and MediocreFunctor instances.
+ *  
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
  *  the Free Software Foundation, either version 3 of the License, or
@@ -28,12 +31,14 @@
 
 #include "mediocre.h"
 
+int mediocre_combine_verbose = 0;
+
 // Define the control structs declared to the user in mediocre.h
 // The convenience typedefs MediocreInputControl and MediocreFunctorControl
 // are already in-scope since mediocre.h was included. The control structures
 // are all accessed by the user as opaque pointers to allow us to redesign
 // the iteration scheme without forcing users to recompile their code.
-// Notice how semaphors are used all over the place in the code.
+// Notice how semaphores are used all over the place in the code.
 // Since there is only one-way flow of data (input data to input_thread_buffer
 // chunks and commands to functor threads to output buffer), there may be more
 // efficient ways to redesign this using relaxed memory models.
@@ -65,13 +70,13 @@ struct functor_buffer {
  *  issues  another  command  to the functor thread, which only happens when
  *  the functor is ready  to  receive  a  command.  The  input  loop  thread
  *  synchronizes  with  one  of  its  combine  functor loop threads by using
- *  semaphors. When the input loop thread or combine thread is ready to give
- *  or  receive  a new command, it signals either the command_ready semaphor
- *  or  functor_ready  semaphor,  respectively,  and  waits  on  the   other
- *  semaphor. This way neither thread proceeds until the other is ready, and
- *  we avoid having one thread run so fast that it swaps the  buffers  twice
- *  before the other thread has even started (as embarassingly happened with
- *  my original mutex / condition variable based approach).
+ *  semaphores. When the input loop thread or combine  thread  is  ready  to
+ *  give  or  receive  a  new  command,  it signals either the command_ready
+ *  semaphore or functor_ready semaphore, respectively,  and  waits  on  the
+ *  other  semaphore.  This  way  neither thread proceeds until the other is
+ *  ready, and we avoid having one thread run so  fast  that  it  swaps  the
+ *  buffers twice before the other thread has even started (as embarassingly
+ *  happened with my original mutex / condition variable based approach).
  */
 struct mediocre_functor_control {
     pthread_t thread_id;
@@ -170,6 +175,12 @@ struct mediocre_input_control {
     MediocreFunctorControl functor_threads[];
 };
 
+// verbose_* functions are functions that print out that we are doing a
+// certain thing (e.g. verbose_command_sem_wait prints that we are calling
+// sem_wait on the command_ready_sem) when mediocre_combine_verbose is true.
+// They're implemented in a seperate file combinedebug.h to save room here.
+#include "combinedebug.h"
+
 #define CHECK_STATUS_VARIABLE(name) \
     do { \
         if (status != 0) { \
@@ -183,9 +194,15 @@ struct mediocre_input_control {
 static const MediocreInputCommand input_exit = { 1, 0, { 0, 0 }, NULL };
 static const MediocreFunctorCommand functor_exit = { 1, { 0, 0 }, NULL, NULL };
 
-/*  Function that the implementor of an input loop is expected to call  each
- *  iteration  to  get a command. This function will return a command to the
- *  user that includes a pointer to the input thread buffer of  one  of  the
+/*  The implementor of a MediocreInput instance was instructed  to  write  a
+ *  loop function that calls this mediocre_input_control_get function to get
+ *  a command each iteration. We will use the loop that the user  wrote  and
+ *  use  it  as the 'main loop' of the combine function that, in addition to
+ *  keeping track of how much of the input was read  so  far,  also  assigns
+ *  work  to  the threads running MediocreFunctor loop_functions. We will do
+ *  this by getting a bunch of work done in this  function,  which  from  an
+ *  outside  perspective  looks like it just returns a command. The returned
+ *  command includes a pointer to the input thread  buffer  of  one  of  the
  *  combine  functor  threads  under  the  control  of the input thread. The
  *  command also specifies which subrange of the input that we want the user
  *  to  load  into the buffer in chunk format. In each iteration, we need to
@@ -239,9 +256,11 @@ mediocre_input_control_get(MediocreInputControl* control) {
     if (prev_thr != NULL) {
         const size_t odd_flag = prev_thr->input_odd_flag;
         
+        verbose_command_sem_post(prev_thr);
         status = sem_post(&prev_thr->command_ready_sem);
             CHECK_STATUS_VARIABLE("sem_post");
         
+        verbose_functor_sem_wait(prev_thr);
         do {
             status = sem_wait(&prev_thr->functor_ready_sem);
         } while (status != 0 && errno == EINTR);
@@ -258,6 +277,7 @@ mediocre_input_control_get(MediocreInputControl* control) {
         const int error_code = input_buffer(prev_thr)->nonzero_error;
         if (error_code != 0) {
             control->received_exit_command = 1;
+            verbose_input_command(control, input_exit);
             return input_exit;
         }
     }
@@ -289,6 +309,7 @@ mediocre_input_control_get(MediocreInputControl* control) {
     
     if (offset >= control->input_dimension.width) {
         control->received_exit_command = 1;
+        verbose_input_command(control, input_exit);
         return input_exit;
     } else {
         // Always give the user the maximum request that we promised we'd give,
@@ -317,6 +338,7 @@ mediocre_input_control_get(MediocreInputControl* control) {
     MediocreInputCommand command = {
         0, offset, request_dim, buffer->chunk_data
     };
+    verbose_input_command(control, command);
     return command;
 }
 
@@ -331,9 +353,11 @@ mediocre_functor_control_get(MediocreFunctorControl* control) {
     
     const size_t odd_flag = control->functor_odd_flag;
     
+    verbose_functor_sem_post(control);
     status = sem_post(&control->functor_ready_sem);
     CHECK_STATUS_VARIABLE("sem_post");
     
+    verbose_command_sem_wait(control);
     do {
         status = sem_wait(&control->command_ready_sem);
     } while (status != 0 && errno == EINTR);
@@ -345,6 +369,7 @@ mediocre_functor_control_get(MediocreFunctorControl* control) {
     
     if (functor_thread_buffer->command_output == NULL) {
         control->received_exit_command = 1;
+        verbose_functor_command(control, functor_exit);
         return functor_exit;
     } else {
         MediocreFunctorCommand command = {
@@ -353,6 +378,7 @@ mediocre_functor_control_get(MediocreFunctorControl* control) {
             functor_thread_buffer->chunk_data,
             functor_thread_buffer->command_output
         };
+        verbose_functor_command(control, command);
         return command;
     }
 }
@@ -613,6 +639,8 @@ int mediocre_combine(
            (const char*)
            (input_control->functor_threads + input_control->thread_count));
     
+    verbose_input_control(input_control, allocated, allocated+bytes_allocated);
+    
     // We can finally pass control to the user's input loop.
     int error_code =
         input.loop_function(input_control, input.user_data, maximum_request);
@@ -649,6 +677,11 @@ int mediocre_combine(
         free(control->aligned_temp);
         
         // user_data will be freed by the user-supplied destructor, not us.
+        
+        if (mediocre_combine_verbose) {
+            print_thread(control);
+            printf(" cleaned up.\n");
+        }
     }
     
     // Check for errors in either the input loop or any of the functor threads.

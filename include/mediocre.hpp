@@ -1,7 +1,7 @@
 /*  An aggresively average SIMD combine library.
  *  Copyright (C) 2017 David Akeley
  *  
- *  C++ interface XXX document later
+ *  C++ interface XXX unfinished and not documented.
  *  
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by

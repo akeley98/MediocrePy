@@ -21,7 +21,8 @@ with the high level interface implemented in __init__.py
 
 Actually, we're not just repeating definitions, we're also adding wrappers
 that take Structures from the C functions and package them in higher-level,
-resource safe objects so that the code in __init__.py never has a `raw` structure that could leak resources if an exception is thrown.
+resource safe objects so that the code in __init__.py never has a `raw`
+structure that could leak resources if an exception is thrown.
 """
 
 import os

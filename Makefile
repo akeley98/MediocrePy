@@ -15,7 +15,7 @@ bin/mediocre.so: bin/combine.s bin/input.s bin/mean.s bin/median.s
 
 
 
-bin/combine.s: src/combine.c include/mediocre.h
+bin/combine.s: src/combine.c include/mediocre.h src/inline/combinedebug.h
 	$(CC) src/combine.c -o bin/combine.s
 	
 # bin/input.s takes up like 90% of the compile time and 90% of the space in the # final .so file, but I NEED the delicious C++ templates!

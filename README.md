@@ -6,7 +6,7 @@ An aggressively average SIMD combine library (single-precision float array avera
 
 I provided a makefile that uses clang as the C and C++ compiler. I used `clang version 3.8.0-2ubuntu4 (tags/RELEASE_380/final)` in development. You can change the compiler in the makefile, but this program is not exactly the most portable program: if you switch the compiler, be aware that the program uses Intel compiler style intrinsics (`__mm256_frobnicate_epu32`). Also, this program depends on `pthread` and `posix_memalign`. It's not designed with non-Unix systems in mind. Running `make` in the root directory for the project should create the library `bin/mediocre.so` for the project.
 
-There's only one header file for C programs for this library: `include/mediocre.h`. Feel free to link in the four files `bin/mean.s bin/median.s bin/input.s bin/combine.s` if you don't want to depend on a `.so` library.
+There's only one header file for C programs for this library: `include/mediocre.h`. The header file is well-documented (I hope!) and can be used as a reference while using this library. Feel free to statically link the four files `bin/mean.s bin/median.s bin/input.s bin/combine.s` into your program if you don't want to depend on a `.so` library.
 
 If you are planning to use this library in a Python program, first build the C library (run `make` from the terminal in the root directory for the project), then copy the entire directory into your project. The root directory serves as the module's directory (i.e., `import MediocrePy` should work when run in the directory that holds the root directory that you just copied). This README describes the purpose and usage of the library mainly from a C programmer's perspective: the Python documentation is provided in docstrings of the Python module. I used `Python 2.7.12 (default, Nov 19 2016, 06:48:10) [GCC 5.4.0 20160609] on linux2` and `numpy 1.11.0` (required dependency) in development. My choice of Python 2 over Python 3 is my small contribution to the greater fad in America to take pride in one's political incorrectness `;-)`. Really, though, for now it still seems that Python 2 is eating Python 3's lunch in the _real world_, but it shouldn't be all that hard to port to Python 3 if/when needed since only a very small part of the library is written in Python, and the library does zero str/unicode processing.
 
@@ -16,7 +16,7 @@ Internally, the library uses 256-bit single precision floating point vectors eve
 
 Keep in mind that compilers are often no help when it comes to memory alignment for such vector data types, so be vigilant. If you are a user of the library just looking to use the default combine and input methods, you don't have to worry about alignment all that much.
 
-Please be cautious when using this library on overclocked computers or poorly-cooled laptops! AVX instructions are known to produce more heat than typical instructions. A computer that appears stable because it can handle "100%" CPU load may have latent instability revealed by a program like this one, which really comes much closer to using 100% of the CPU. Just because your overclocked rig runs Overwatch at 1440p just fine doesn't mean that it really is a stable computer.
+Please be cautious when using this library on overclocked computers or poorly-cooled laptops! AVX instructions are known to produce more heat than typical instructions. A computer that appears stable because it can handle "100%" CPU load may have latent instability revealed by a program like this one, which really comes much closer to using 100% of the CPU.
 
 ## Introduction (skip to here when you tire of reading the warning!)
 
@@ -35,9 +35,9 @@ This library aims to solve this combine problem (for single precision, 32 bit fl
 
 This is a good time for me to point out that different parts of the README are relevant for you to read depending on your needs. If you are interested in the library mainly for the first thing it provides, the default combine methods, then you shouldn't have to listen to me blather on about chunk format: skip ahead to and read just the "High Level Description" section. If however you are interested in implementing your own combine algorithm or a new method of data input, or you are interested in how the library itself is organized and implemented, read onwards.
 
-Iinput arrays can come in lots of different shapes and sizes, can take a long time to load, and generally are not in formats convenient for writing vectorized code. The input could be from a bunch of fortran-order arrays of 36 bit integers. It could be coming from a memory mapped FITS file stored on Neptune. It could be from a human-readable list of numbers written out in Yiddish. We want to make it so that one combine algorithm can be run on any input, we want that combine algorithm to be supplied with input in a format designed with vectorization in mind, and we want the combine algorithm to spend as little time as possible stalled waiting on input. To this end, the library separates the responsibility of loading input from the responsibility of combining the input, the library specifies the vectorization-friendly chunk format as the method in which input algorithms provide data to combine algorithms, and it runs input algorithms on a separate thread from combine algorithms.
+Input arrays can come in lots of different shapes and sizes, can take a long time to load, and generally are not in formats convenient for writing vectorized code. The input could be from a bunch of fortran-order arrays of 36 bit integers. It could be coming from a memory mapped FITS file stored on Neptune. It could be from a human-readable list of numbers written out in Yiddish. (Implementing these input methods is left as an exercise for the reader). We want to make it so that one combine algorithm can be run on any input, we want that combine algorithm to be supplied with input in a format designed with vectorization in mind, and we want the combine algorithm to spend as little time as possible stalled waiting on input. To this end, the library separates the responsibility of loading input from the responsibility of combining the input, the library specifies the vectorization-friendly chunk format as the method in which input algorithms provide data to combine algorithms, and it runs input algorithms on a separate thread from combine algorithms.
 
-I provided an Input & Combine Implementors' Guide that you should read to learn how to implement function compatible with the library. I also plan to write design notes if you are interested in the library itself. In any case, also consider skimming the following high level description and reading the first part of the Implementors' guide to see documentation on chunks.
+I provided an Input & Combine Implementors' Guide that you should read to learn how to implement function compatible with the library. I also wrote some brief design notes if you are interested in the library implementation itself (I should expand them later). In any case, also consider skimming the following high level description and reading the first part of the Implementors' guide to see documentation on chunks.
 
 ## High Level Description
 
@@ -176,7 +176,20 @@ You can break or return out of the loop, and can continue to the next command, j
 
 You don't have to use a macro; you can manually write a loop that does what the macro does. All the loop does every iteration is call `mediocre_input_control_get` or `mediocre_functor_control_get` with the control structure as the argument. The function returns a command, and the loop terminates immediately if the command's _exit field is true. The get command function should not be called again until the loop has completely finished the previous command.
 
-`loop_function` inside `src/median.c` provides a good, relatively simple example of how a loop function should be written. You don't have to understand `clipped_median_chunk_m256`. Just know that it combines an array of `chunk_count` chunks of `combine_count __m256` vectors into an array of `chunk_count __m256` vectors stored in `temp_output`. But first, read some of the specifics below on implementing either an input loop function or a combine functor loop function.
+`loop_function` inside `src/median.c` provides a good, relatively simple example of how a loop function should be written. You don't have to understand `clipped_median_chunk_m256`. Just know that it combines an array of `chunk_count` chunks of `combine_count __m256` vectors into an array of `chunk_count __m256` vectors stored in `temp_output` (see picture). But first, read some of the specifics below on implementing either an input loop function or a combine functor loop function.
+
+        clipped_median_chunk_m256 example (combine_count = 3, chunk_count = 2)
+        No sigma clipping for this example.
+        
+        input+0   [18, 21, 35, 42, 56, 66, 78, 82]    # Chunk 0
+             +32  [17, 26, 35, 40, 52, 63, 77, 83]
+             +64  [12, 21, 32, 46, 58, 69, 78, 89]
+             +96  [37, 46, 57, 65, 70, 80, 90, 106]   # Chunk 1
+             +128 [32, 44, 54, 60, 71, 83, 92, 100]
+             +160 [31, 45, 57, 68, 70, 82, 92, 103]
+        
+        output+0  [17, 21, 35, 42, 56, 66, 78, 83]    # Median of chunk 0
+              +32 [32, 45, 57, 65, 70, 82, 92, 103]   # Median of chunk 1
 
 ## Specifics of MediocreInput loop_function
 
@@ -204,7 +217,10 @@ There are few guarantees on the `output` pointer because it directly points to a
 
 `mediocre_combine` will call your loop function once for each thread that it launches. The combine work will be split among the different threads. It is very important then that the loop function is thread safe.
 
-## Structure of the Library
+## mediocre_combine implementation (WIP)
 
-## Confession (Design notes)
+If you want to figure out how the library really works (good luck!), the answer lies somewhere in `src/combine.c`. The other source files implement MediocreInput and MediocreFunctor instances; `src/combine.c` is what actually enables them to work together. Basically, what we do is launch a bunch of threads (`thread_count` of them) that run the MediocreFunctor's `loop_function`, so that they're all waiting for commands from the library. We then pass control to the MediocreInput `loop_function`. We trick the user into doing work for us by adapting that input `loop_function` as the "main loop" for the entire combine operation. To do this, we have the `MediocreInputControl` structure do some bookkeeping on how much of the arrays we have processed so far (so we know how far we are in the iteration) and some bookkeeping on the MediocreFunctor threads launched for us. In each iteration of the MediocreInput's `loop_function`, we do some extra work when the MediocreInput asks for a command in each iteration (since the function `mediocre_input_control_get` accesses the `MediocreInputControl` structure); this work includes giving commands to the MediocreFunctor `loop_function`s running in the launched threads and updating the `MediocrInputControl` bookkeeping.
+
+I should write some better design notes later. For now, consider setting the global variable `mediocre_combine_verbose` to true and running `mediocre_combine`. Stare at the output and the many comments in `src/combine.c` and you may achieve nirvana.
+
 

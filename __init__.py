@@ -298,7 +298,7 @@ Python-programmer-friendly Functor object factory function.
     
     no_argtypes: Force this argument to true to override the requirement
     to set c_function's argtypes attribute. You still have to set the
-    restype attribute no matter what.
+    restype attribute to struct_mediocre_functor no matter what.
     
     return value: a Python function that takes arguments that are
     passed to the C factory function and returns a Functor object that
