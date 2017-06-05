@@ -41,7 +41,7 @@ First, an example to whet your appetite:
 >>> k = np.array([178, 171, 174, 115, 185, 127])
 >>> l = np.array([121, 170, 166, 177, 190, 116])
 >>> 
->>> # We'll combine using the clipped mean algorithm today.
+>>> # We'll combine arrays using the clipped mean algorithm today.
 >>> # Clipping removes outliers before averaging the remaining entries.
 >>> n = MediocrePy.clipped_mean((a, b, c, d, e, f, g, h, i, j, k, l))
 >>> print "%.2f %.2f %.2f %.2f %.2f %.2f" % tuple(n)
