@@ -1,6 +1,6 @@
 # mediocre and MediocrePy
 
-An aggressively average SIMD combine library (single-precision float array averages with sigma clipping), and a python 2 interface for it. The library includes the mean, median, and sigma-clipped mean array combine algorithms, can handle 1-or-2 dimensional input arrays (including Fortran order and non-contiguous arrays) of any primitive data type (8/16/32/64 bit signed/unsigned integer, 32/64 bit float), and is designed with parallelism and extensibility in mind.
+An aggressively average SIMD combine library (single-precision float array averages with sigma clipping), and a Python 2 interface for it. The library includes the mean, median, and sigma-clipped mean array combine algorithms, can handle 1-or-2 dimensional input arrays (including Fortran order and non-contiguous arrays) of any primitive data type (8/16/32/64 bit signed/unsigned integer, 32/64 bit float), and is designed with parallelism and extensibility in mind.
 
 ## Building
 
@@ -87,7 +87,7 @@ In part 1 we create a MediocreInput instance that describes the data that we wan
 
 In part 2 we create a MediocreFunctor instance that describes the combine algorithm we want to run. In this case we want to take the mean of each column of data. `mediocre_mean_functor` returns a functor that does just that. Other functions returning MediocreFunctor instances may take arguments; this one doesn't. The library also includes more sophisticated combine algorithms such as the median and sigma clipped mean algorithms.
 
-In part 3 we check the error field of the input and functor instances to see any function failed to initialize the structure they were supposed to. `IN THIS LIBRARY, ZERO ALWAYS MEANS SUCCESS AND NON-ZERO INDICATES AN ERROR`. You don't have to check this; mediocre_combine will also check for an error code, forwarding any error codes and cancelling the combine if needed.
+In part 3 we check the error field of the input and functor instances to see any function failed to initialize the structure they were supposed to. `IN THIS LIBRARY, ZERO ALWAYS MEANS SUCCESS AND NON-ZERO INDICATES AN ERROR`. You don't have to check this; `mediocre_combine` will also check for an error code, forwarding any error codes and cancelling the combine if needed.
 
 While we're talking about conventions, I may as well mention that if you prefer to write out structure types with the `struct` prefix and `all_lowercase` names in traditional C style, all (user-visible) structure types with typedef names of the form `MediocreFooBar` in the library can also be referred to in the form `struct mediocre_foo_bar`.
 
@@ -113,12 +113,12 @@ Now I will describe the terrifying chunk format that I've been hinting at for so
                          [ x0, x1, x2, x3, x4, x5, x6, x7 ]
                          [ y0, y1, y2, y3, y4, y5, y6, y7 ]
                          [ z0, z1, z2, z3, z4, z5, z6, z7 ]
-                         [ w8, w9, w10, 0,  0,  0,  0,  0 ]  (CHUNK 1)
-                         [ x8, x9, x10, 0,  0,  0,  0,  0 ]
-                         [ y8, y9, y10, 0,  0,  0,  0,  0 ]
-                         [ z8, z9, z10, 0,  0,  0,  0,  0 ]
+                         [ w8, w9, w10, -,  -,  -,  -,  - ]  (CHUNK 1)
+                         [ x8, x9, x10, -,  -,  -,  -,  - ]
+                         [ y8, y9, y10, -,  -,  -,  -,  - ]
+                         [ z8, z9, z10, -,  -,  -,  -,  - ]
         
-In words, a group of input arrays is converted to chunk format by packing 8 columns of the input arrays at a time into a chunk. Each chunk consists of `combine_count __m256` vectors, with each vector holding 8 entries from exactly one of the input arrays. Chunk `N` holds data from columns `N*8` to `N*8 + 7`, with vector `V` of the chunk holding input from input array `V`. Extra entries in the vectors of the last chunk should be filled with `0`'s (although I suppose it would be unwise to rely on this requirement).
+In words, a group of input arrays is converted to chunk format by packing 8 columns of the input arrays at a time into a chunk. Each chunk consists of `combine_count __m256` vectors, with each vector holding 8 entries from exactly one of the input arrays. Chunk `N` holds data from columns `N*8` to `N*8 + 7`, with vector `V` of the chunk holding input from input array `V`.
 
         BTW, _mm256_set_ps has its arguments in backwards order for some reason.
 
@@ -193,6 +193,53 @@ You don't have to use a macro; you can manually write a loop that does what the 
 
 ## Specifics of MediocreInput loop_function
 
+A complete MediocreInput.loop_function implementation will look something like this:
+
+        static int loop_function(
+            MediocreInputControl* control,
+            void const* user_data,
+            MediocreDimension maximum_request
+        ) {
+            MyUserDataType* data = (MyUserDataType*)user_data;
+            size_t array_count = maximum_request.combine_count;
+            
+            MediocreInputCommand command;
+            MEDIOCRE_INPUT_LOOP(command, control) {
+                size_t offset = command.offset;
+                
+                // Method 1 (treating output as 2D array using mediocre_chunk_ptr)
+                for (size_t a = 0; a < array_count; ++a) {
+                    MyArrayType* array = get_array(a, data);
+                    for (size_t x = 0; x < command.dimension.width; ++x) {
+                        float number = index_array(offset + x, array);
+                        *mediocre_chunk_ptr(command.output_chunks, array_count, a, x) = number;
+                    }
+                }
+                
+                // Method 2 (interacting with chunk format directly)
+                // chunk count is ceil(requested width / 8)
+                size_t chunk_count = (command.dimension.width + 7) / 8;
+                for (size_t c = 0; c < chunk_count; ++c) {
+                    // Each chunk is array_count vectors wide.
+                    __m256* this_chunk = command.output_chunks + array_count*c;
+                    for (size_t a = 0; a < chunk_count; ++a) {
+                        MyArrayType* array = get_array(a, data);
+                        __m256 vector = _mm256_set_ps(
+                            safe_index_array(c*8 + 7, array),
+                            safe_index_array(c*8 + 6, array),
+                             /* ... */
+                            safe_index_array(c*8,     array)
+                        );
+                        // safe_index_array is a stand in for a function that does bounds-
+                        // checking before returning data at the requested index. (Needed because
+                        // the requested width may not be divisible by 8).
+                        
+                        // Entry a in a chunk corresponds to data from array number a.
+                        this_chunk[a] = vector;
+                    }
+                }
+            }
+            
 The `MediocreInputCommand` you receive in each iteration contains three pertinent variables: the `dimension` of the request, the `offset` into the arrays that your are expected to load from, and the location you are expected to write input in chunk format to: `output_chunks`.
 
 Each time a command is received, the input loop function should load columns `offset` to `offset + dimension.width - 1` of the input arrays into the `__m256` array `output_chunks`. The columns should be loaded in chunk format, with chunk 0 corresponding to columns `offset` to `offset + 7`, chunk 1 corresponding to `offset + 8` to `offset + 15`, and so on (see above for chunk format).
@@ -203,6 +250,8 @@ Each time a command is received, the input loop function should load columns `of
 `output_chunks` points to 32-byte aligned storage large enough to store the number of chunks requested (`ceil(dimension.width / 8)`).
 
 The loop function will be run one one thread only: the one that called `mediocre_combine`. This should simplify dealing with locked data structures, but means that the input function may be a bottleneck.
+
+
 
 ## Specifics of MediocreFunctor loop_function
 
