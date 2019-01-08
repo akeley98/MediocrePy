@@ -43,45 +43,69 @@ I provided an Input & Combine Implementors' Guide that you should read to learn 
 
 It was a bit inaccurate for me to say that the library allows for programmers to implement input and combine functions. What's really being implemented are input structures and combine functor structures (Known as MediocreInput and MediocreFunctor in the code). You need to create one instance of each in order to start combining. Consider the following example:
         
-        // Average three arrays of [array_width] floats into one array
-        // of [array_width] floats. Returns 0 if successful, a nonzero
-        // error code if not successful.
-        int mean_three_arrays(
-            float* output,
-            float const* input0,
-            float const* input1,
-            float const* input2,
-            size_t array_width
-        ) {
-            // Part 1
-            float const* input_pointers[3] = { input0, input1, input2 };
-            MediocreDimension dim;
-            dim.combine_count = 3;      // We are combining 3 arrays.
-            dim.width = array_width;    // Each array is this wide.
-            MediocreInput input = mediocre_float_input(input_pointers, dim);
-            
-            // Part 2
-            MediocreFunctor combine_functor = mediocre_mean_functor();
-            
-            // Part 3
-            if (input.nonzero_error != 0) {
-                fprintf(stderr, "MediocreInput not constructed.\n");
-                return -1;
-            }
-            if (combine_functor.nonzero_error != 0) {
-                fprintf(stderr, "MediocreFunctor not constructed.\n");
-                return -1;
-            }
-            
-            // Part 4
-            int err = mediocre_combine(output, input, combine_functor, 2);
+    #include <stdio.h>
+    #include "mediocre.h"
+    // Average three arrays of [array_width] floats into one array
+    // of [array_width] floats. Returns 0 if successful, a nonzero
+    // error code if not successful.
+    int mean_three_arrays(
+        float* output,
+        float const* input0,
+        float const* input1,
+        float const* input2,
+        size_t array_width
+    ) {
+        int err;
 
-            // Part 5
-            mediocre_functor_destroy(combine_functor);
-            mediocre_input_destroy(input);
-            
-            return err;
+        // Part 1
+        float const* input_pointers[3] = { input0, input1, input2 };
+        MediocreDimension dim;
+        dim.combine_count = 3;      // We are combining 3 arrays.
+        dim.width = array_width;    // Each array is this wide.
+        MediocreInput input = mediocre_float_input(input_pointers, dim);
+        
+        // Part 3a
+        if (input.nonzero_error != 0) {
+            fprintf(stderr, "MediocreInput not constructed.\n");
+            return -1;
         }
+        
+        // Part 2
+        MediocreFunctor combine_functor = mediocre_mean_functor();
+        
+        // Part 3b
+        if (combine_functor.nonzero_error != 0) {
+            fprintf(stderr, "MediocreFunctor not constructed.\n");
+            mediocre_input_destroy(input);
+            return -1;
+        }
+        
+        // Part 4
+        err = mediocre_combine(output, input, combine_functor, 2);
+
+        // Part 5
+        mediocre_functor_destroy(combine_functor);
+        mediocre_input_destroy(input);
+        
+        return err;
+    }
+
+    // Simple test program.
+    int main() {
+        float input0[12] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 };
+        float input1[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        float input2[12] = { 0, 300, 0, 300, 0, 300, 0, 300, 0, 300, 0, 300 };
+        
+        float output[12];
+        
+        int err = mean_three_arrays(output, input0, input1, input2, 12);
+        
+        printf("Error code %i\n", err);
+        for (int i = 0; i < 12; ++i) {
+            printf("[%2i] = %f\n", i, output[i]);
+        }
+        return 0;
+    }
 
 In part 1 we create a MediocreInput instance that describes the data that we want combined, including the dimensions of the data we want to combine (as a MediocreDimension structure). In this case, we call `mediocre_float_input`, one of the default functions for creating MediocreInput instances provided by the library; this creates a MediocreInput instance describing input from a list of 1D C arrays of floats. Keep in mind that, in general, MediocreInput instances only describe data; they don't contain them. This means that it may be unsafe to free data passed to such functions while the MediocreInput they've returned is in use. Each function returning MediocreInput instances should document their exact requirements.
 
