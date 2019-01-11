@@ -1,11 +1,11 @@
 MYFLAGS = -mavx -D_POSIX_C_SOURCE=201112L -Wall -Wextra -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=implicit-function-declaration -Wno-missing-field-initializers -g
 
 # Change these commands if you want to change the C and C++ compilers.
-CC = clang-4.0 $(MYFLAGS) -fPIC -O2 -S -std=c99 -I include -I src/inline
-CC4 = clang-4.0 $(MYFLAGS) -fPIC -O3 -S -std=c99 -I include -I src/inline
-Cxx = clang++-4.0 $(MYFLAGS) -fPIC -O2 -S -std=c++11 -I include -I src/inline
-LinkLib = clang++-4.0 -fPIC -lm -lpthread -shared
-LinkTest = clang++-4.0 -lpthread
+CC = clang $(MYFLAGS) -fPIC -O2 -S -std=c99 -I include -I src/inline
+CC4 = clang $(MYFLAGS) -fPIC -O3 -S -std=c99 -I include -I src/inline
+Cxx = clang++ $(MYFLAGS) -fPIC -O2 -S -std=c++11 -I include -I src/inline
+LinkLib = clang++ -fPIC -lm -lpthread -shared
+LinkTest = clang++ -lpthread
 
 # bin/ is a bit of a misnomer since I'm really compiling to assembly instead of
 # object files, so that I can see what the hell the compiler is actually up to.
