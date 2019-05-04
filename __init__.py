@@ -44,20 +44,20 @@ First, an example to whet your appetite:
 >>> # We'll combine arrays using the clipped mean algorithm today.
 >>> # Clipping removes outliers before averaging the remaining entries.
 >>> n = MediocrePy.clipped_mean((a, b, c, d, e, f, g, h, i, j, k, l))
->>> print "%.2f %.2f %.2f %.2f %.2f %.2f" % tuple(n)
+>>> print("%.2f %.2f %.2f %.2f %.2f %.2f" % tuple(n))
 139.83 170.64 152.75 147.00 158.75 144.33
 >>> #     ^                    ^
 >>> # Outlier 999 is rejected, ^
 >>> # but outlier 90 is accepted and affected the mean.
 >>>
->>> print MediocrePy.clipped_mean
+>>> print(MediocrePy.clipped_mean)
 <MediocrePy.Functor object at 0x7fe638478910>
 >>> # clipped_mean is a function-like object MediocrePy.Functor. We can
 >>> # create our own -- let's set a stricter limit for outliers (2 SD).
 >>> stricter_mean = MediocrePy.ClippedMean(sigma=2.0)
 >>> 
 >>> n = stricter_mean((a, b, c, d, e, f, g, h, i, j, k, l))
->>> print "%.2f %.2f %.2f %.2f %.2f %.2f" % tuple(n)
+>>> print("%.2f %.2f %.2f %.2f %.2f %.2f" % tuple(n))
 139.83 170.50 152.75 147.00 165.00 144.33
 >>> #     ^                    ^
 >>> # With stricter bounds, both 999 and 90 were clipped out as outliers.
@@ -69,11 +69,15 @@ and scaled_mean) provide good places to learn more about the library.
 
 from . import _c
 from . import _docs
-from _c import Dimension, CombineError, FunctorFactoryError
+from ._c import Dimension, CombineError, FunctorFactoryError
 struct_mediocre_functor = _c.FunctorBlob
 
 import numpy as _np
 import os
+
+try:
+    range = xrange
+except NameError: pass
 
 class Functor(object):
     """A callable object that can combine arrays of (possibly masked) data
@@ -251,7 +255,7 @@ class Functor(object):
             # Construct an array of MediocreMasked2D structures and then
             # use the MediocreMasked2D input type as the input_obj.
             mediocre_masked_array = (_c.Masked2D * combine_count)()
-            for i in xrange(combine_count):
+            for i in range(combine_count):
                 arr = arrays[i]
                 mask = masks[i]
                 if arr.shape != expected_shape:

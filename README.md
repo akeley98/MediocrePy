@@ -1,6 +1,6 @@
 # mediocre and MediocrePy
 
-An aggressively average SIMD combine library (single-precision float array averages with sigma clipping), and a Python 2 interface for it. The library includes the mean, median, and sigma-clipped mean array combine algorithms, can handle 1-or-2 dimensional input arrays (including Fortran order and non-contiguous arrays) of any primitive data type (8/16/32/64 bit signed/unsigned integer, 32/64 bit float), and is designed with parallelism and extensibility in mind.
+An aggressively average SIMD combine library (single-precision float array averages with sigma clipping), and Python 2 and Python 3 interfaces for it. The library includes the mean, median, and sigma-clipped mean array combine algorithms, can handle 1-or-2 dimensional input arrays (including Fortran order and non-contiguous arrays) of any primitive data type (8/16/32/64 bit signed/unsigned integer, 32/64 bit float), and is designed with parallelism and extensibility in mind.
 
 ## Building
 
@@ -8,7 +8,7 @@ I provided a makefile that uses clang as the C and C++ compiler. I used `clang v
 
 There's only one header file for C programs for this library: `include/mediocre.h`. The header file is well-documented (I hope!) and can be used as a reference while using this library. Feel free to statically link the four files `bin/mean.s bin/median.s bin/input.s bin/combine.s` into your program if you don't want to depend on a `.so` library.
 
-If you are planning to use this library in a Python program, first build the C library (run `make` from the terminal in the root directory for the project), then copy the entire directory into your project. The root directory serves as the module's directory (i.e., `import MediocrePy` should work when run in the directory that holds the root directory that you just copied). This README describes the purpose and usage of the library mainly from a C programmer's perspective: the Python documentation is provided in docstrings of the Python module. I used `Python 2.7.12 (default, Nov 19 2016, 06:48:10) [GCC 5.4.0 20160609] on linux2` and `numpy 1.11.0` (required dependency) in development. My choice of Python 2 over Python 3 is my small contribution to the greater fad in America to take pride in one's political incorrectness `;-)`. Really, though, for now it still seems that Python 2 is eating Python 3's lunch in the _real world_, but it shouldn't be all that hard to port to Python 3 if/when needed since only a very small part of the library is written in Python, and the library does zero str/unicode processing.
+If you are planning to use this library in a Python program, first build the C library (run `make` from the terminal in the root directory for the project), then copy the entire directory into your project. The root directory serves as the module's directory (i.e., `import MediocrePy` should work when run in the directory that holds the root directory that you just copied). This README describes the purpose and usage of the library mainly from a C programmer's perspective: the Python documentation is provided in docstrings of the Python module. I used `Python 2.7.12 (default, Nov 19 2016, 06:48:10) [GCC 5.4.0 20160609] on linux2` and `numpy 1.11.0` (required dependency) in development. I tested the Python 3 port with `Python 3.6.7 (default, Oct 22 2018, 11:32:17) [GCC 8.2.0] on linux`.
 
 ## First, a word of warning
 
@@ -302,7 +302,9 @@ There are few guarantees on the `output` pointer because it directly points to a
 
 `mediocre_combine` will call your loop function once for each thread that it launches. The combine work will be split among the different threads. It is very important then that the loop function is thread safe.
 
-## mediocre_combine implementation (WIP)
+## mediocre_combine implementation
+
+_Two years later, and it doesn't look like I'm ever going to write these design notes, but I doubt that anyone was interested in the first place. If you are curious about the library's implementation though, I am happy to have a chat with you over it. Maybe we can even go for some lemon cookies and crysanthemum tea!_
 
 If you want to figure out how the library really works (good luck!), the answer lies somewhere in `src/combine.c`. The other source files implement MediocreInput and MediocreFunctor instances; `src/combine.c` is what actually enables them to work together. Basically, what we do is launch a bunch of threads (`thread_count` of them) that run the MediocreFunctor's `loop_function`, so that they're all waiting for commands from the library. We then pass control to the MediocreInput `loop_function`. We trick the user into doing work for us by adapting that input `loop_function` as the "main loop" for the entire combine operation. To do this, we have the `MediocreInputControl` structure do some bookkeeping on how much of the arrays we have processed so far (so we know how far we are in the iteration) and some bookkeeping on the MediocreFunctor threads launched for us. In each iteration of the MediocreInput's `loop_function`, we do some extra work when the MediocreInput asks for a command in each iteration (since the function `mediocre_input_control_get` accesses the `MediocreInputControl` structure); this work includes giving commands to the MediocreFunctor `loop_function`s running in the launched threads and updating the `MediocreInputControl` bookkeeping.
 

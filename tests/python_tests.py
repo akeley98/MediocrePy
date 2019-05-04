@@ -31,6 +31,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import print_function
 import sys
 import os
 import random
@@ -42,6 +43,10 @@ import MediocrePy
 
 epsilon = 1.000005
 epsilon_recip = 1/epsilon
+
+try:
+    range = xrange
+except NameError: pass
 
 def almost_equal(a, b):
     if b != 0:
@@ -93,15 +98,15 @@ def random_data(shape, dtype=None, contiguous=False):
         raw_data = np.empty((shape[0] * (1+r0),), dtype, order)
         result = raw_data[::1+r0]
         assert result.shape == shape
-        for i in xrange(shape[0]):
+        for i in range(shape[0]):
             result[i] = rand_normal()
     
     elif len(shape) == 2:
         raw_data = np.empty((shape[0]*(1+r0), shape[1]*(1+r1)), dtype, order)
         result = raw_data[::1+r0, ::1+r1]
         assert result.shape == shape
-        for x in xrange(shape[0]):
-            for y in xrange(shape[1]):
+        for x in range(shape[0]):
+            for y in range(shape[1]):
                 result[x][y] = rand_normal()
     
     return result
@@ -123,8 +128,8 @@ def random_mask(shape, dtype=None, nonzero_means_bad=True):
     raw_data = np.empty((shape[0] * (1+r0), shape[1] * (1+r1)), dtype, order)
     result = raw_data[::1+r0, ::1+r1]
     assert result.shape == shape
-    for x in xrange(shape[0]):
-        for y in xrange(shape[1]):
+    for x in range(shape[0]):
+        for y in range(shape[1]):
             result[x][y] = (rand.random() > .05) ^ nonzero_means_bad
     
     return result
@@ -137,12 +142,12 @@ def py_mask(array, mask, nonzero_means_bad):
         raise TypeError
     result = np.empty(shape=shape, dtype=np.float32)
     row_count, col_count = shape
-    for r in xrange(row_count):
-        for c in xrange(col_count):
+    for r in range(row_count):
+        for c in range(col_count):
             if bool(mask[r][c]) == nonzero_means_bad:
                 numbers = []
-                for mask_r in xrange(max(0, r-2), min(r+3, row_count)):
-                    for mask_c in xrange(max(0, c-2), min(c+3, col_count)):
+                for mask_r in range(max(0, r-2), min(r+3, row_count)):
+                    for mask_c in range(max(0, c-2), min(c+3, col_count)):
                         if bool(mask[mask_r][mask_c]) != nonzero_means_bad:
                             numbers.append(array[mask_r][mask_c])
                 result[r][c] = np.median(numbers)
@@ -160,11 +165,11 @@ def py_combine(combine_function, arrays, masks=None, nonzero_means_bad=True):
             for i, arr in enumerate(arrays)]
         
     if len(shape) == 1:
-        for i in xrange(shape[0]):
+        for i in range(shape[0]):
             result[i] = combine_function([arr[i] for arr in arrays])
     elif len(shape) == 2:
-        for r in xrange(shape[0]):
-            for c in xrange(shape[1]):
+        for r in range(shape[0]):
+            for c in range(shape[1]):
                 result[r][c] = combine_function([arr[r][c] for arr in arrays])
     else:
         raise TypeError
@@ -172,7 +177,7 @@ def py_combine(combine_function, arrays, masks=None, nonzero_means_bad=True):
 
 # Clipped mean combine of one column of data implemented in pure python.
 def py_clipped_mean_combine(data, sigma_lower, sigma_upper, max_iter):
-    for it in xrange(max_iter):
+    for it in range(max_iter):
         mean, std = np.mean(data), np.std(data)
         lower_bounds = mean - std * sigma_lower
         upper_bounds = mean + std * sigma_upper
@@ -189,7 +194,7 @@ def py_scaled_mean_combine(
     
     del data
     
-    for it in xrange(max_iter):
+    for it in range(max_iter):
         mean = np.mean([x[0] for x in qty_wt_pairs])
         std = np.std([x[0] for x in qty_wt_pairs])
         lower_bounds = mean - std * sigma_lower
@@ -205,7 +210,7 @@ def py_scaled_mean_combine(
 
 # Clipped median combine of one column of data implemented in pure python.
 def py_clipped_median_combine(data, sigma_lower, sigma_upper, max_iter):
-    for it in xrange(max_iter):
+    for it in range(max_iter):
         median = np.median(data)
         ss = sum((n-median)*(n-median) for n in data)
         dev = np.sqrt(ss / len(data))
@@ -221,72 +226,72 @@ def get_test_data(shape1D, shape2D, combine_count, dtype):
     nonzero_means_bad = rand.choice((False, True))
     
     arrays1D = [random_data(shape1D, dtype, contiguous)
-        for i in xrange(combine_count)]
+        for i in range(combine_count)]
     
     arrays2D = [random_data(shape2D, dtype, contiguous)
-        for i in xrange(combine_count)]
+        for i in range(combine_count)]
     
     masks = [random_mask(shape2D, dtype, nonzero_means_bad)
-        for i in xrange(combine_count)]
+        for i in range(combine_count)]
     
-    print "combine_count     %s" % combine_count
-    print "contiguous        %s" % contiguous
-    print "nonzero_means_bad %s" % nonzero_means_bad
-    print "shape1D           %s" % (shape1D, )
-    print "shape2D           %s" % (shape2D, )
-    print "dtype             %s" % (dtype().dtype.name if dtype else "multiple")
+    print("combine_count     %s" % combine_count)
+    print("contiguous        %s" % contiguous)
+    print("nonzero_means_bad %s" % nonzero_means_bad)
+    print("shape1D           %s" % (shape1D, ))
+    print("shape2D           %s" % (shape2D, ))
+    print("dtype             %s" % (dtype().dtype.name if dtype else "multiple"))
     
     return contiguous, nonzero_means_bad, arrays1D, arrays2D, masks
 
 def compare_1D(original_data, actual, expected):
     errors = 0
     max_errors = int(round(.0025 * actual.shape[0]))
-    for x in xrange(actual.shape[0]):
+    for x in range(actual.shape[0]):
         if not almost_equal(actual[x], expected[x]):
-            print "[%i] %f != %f" % (x, actual[x], expected[x])
-            print [data[x] for data in original_data]
+            print("[%i] %f != %f" % (x, actual[x], expected[x]))
+            print([data[x] for data in original_data])
             errors += 1
             if errors >= max_errors:
-                print "Too many errors, test failed"
+                print("Too many errors, test failed")
                 sys.exit(1)
     
     rate = errors / float(actual.shape[0])
     color = 34 if rate == 0 else 31
-    print "\t\t\x1b[%im\x1b[1mError rate %.4f%%\x1b[0m" % (color, 100.0 * rate)
+    print("\t\t\x1b[%im\x1b[1mError rate %.4f%%\x1b[0m" % (color, 100.0 * rate))
 
 def compare_2D(original_data, actual, expected):
     errors = 0
     max_errors = int(round(.0025 * actual.shape[0] * actual.shape[1]))
-    for x in xrange(actual.shape[0]):
-        for y in xrange(actual.shape[1]):
+    for x in range(actual.shape[0]):
+        for y in range(actual.shape[1]):
             if not almost_equal(actual[x,y], expected[x,y]):
-                print "[%i %i] %f != %f" % (x, y, actual[x,y], expected[x,y])
-                print [data[x,y] for data in original_data]
+                print("[%i %i] %f != %f" % (x, y, actual[x,y], expected[x,y]))
+                print([data[x,y] for data in original_data])
                 errors += 1
                 if errors >= max_errors:
-                    print "Too many errors, test failed"
+                    print("Too many errors, test failed")
                     sys.exit(1)
     rate = errors / float(actual.shape[0] * actual.shape[1])
     color = 34 if rate == 0 else 31
-    print "\t\t\x1b[%im\x1b[1mError rate %.4f%%\x1b[0m" % (color, 100.0 * rate)
+    print("\t\t\x1b[%im\x1b[1mError rate %.4f%%\x1b[0m" % (color, 100.0 * rate))
     
 def test_mean(shape1D, shape2D, combine_count, dtype):
-    print "\n\x1b[1m\x1b[33mMean test\x1b[0m"
+    print("\n\x1b[1m\x1b[33mMean test\x1b[0m")
     contiguous, nonzero_means_bad, arrays1D, arrays2D, masks = get_test_data(
         shape1D, shape2D, combine_count, dtype
     )
     
-    print "\t1D arrays"
+    print("\t1D arrays")
     actual = MediocrePy.mean(arrays1D)
     expected = py_combine(np.mean, arrays1D)
     compare_1D(arrays1D, actual, expected)
     
-    print "\t2D arrays"
+    print("\t2D arrays")
     actual = MediocrePy.mean(arrays2D)
     expected = py_combine(np.mean, arrays2D)
     compare_2D(arrays2D, actual, expected)
     
-    print "\t2D masked arrays"
+    print("\t2D masked arrays")
     actual = MediocrePy.mean(arrays2D, masks, nonzero_means_bad)
     masked_arrays = [py_mask(a, m, nonzero_means_bad)
         for a, m in zip(arrays2D, masks)]
@@ -294,22 +299,22 @@ def test_mean(shape1D, shape2D, combine_count, dtype):
     compare_2D(arrays2D, actual, expected)
 
 def test_median(shape1D, shape2D, combine_count, dtype):
-    print "\n\x1b[1m\x1b[33mMedian test\x1b[0m"
+    print("\n\x1b[1m\x1b[33mMedian test\x1b[0m")
     contiguous, nonzero_means_bad, arrays1D, arrays2D, masks = get_test_data(
         shape1D, shape2D, combine_count, dtype
     )
     
-    print "\t1D arrays"
+    print("\t1D arrays")
     actual = MediocrePy.median(arrays1D)
     expected = py_combine(np.median, arrays1D)
     compare_1D(arrays1D, actual, expected)
     
-    print "\t2D arrays"
+    print("\t2D arrays")
     actual = MediocrePy.median(arrays2D)
     expected = py_combine(np.median, arrays2D)
     compare_2D(arrays2D, actual, expected)
     
-    print "\t2D masked arrays"
+    print("\t2D masked arrays")
     actual = MediocrePy.median(arrays2D, masks, nonzero_means_bad)
     masked_arrays = [py_mask(a, m, nonzero_means_bad)
         for a, m in zip(arrays2D, masks)]
@@ -317,7 +322,7 @@ def test_median(shape1D, shape2D, combine_count, dtype):
     compare_2D(arrays2D, actual, expected)
 
 def test_clipped_mean(shape1D, shape2D, combine_count, dtype, sigma_data):
-    print "\n\x1b[1m\x1b[33mClipped mean test [%f %f] %i\x1b[0m" % sigma_data
+    print("\n\x1b[1m\x1b[33mClipped mean test [%f %f] %i\x1b[0m" % sigma_data)
     contiguous, nonzero_means_bad, arrays1D, arrays2D, masks = get_test_data(
         shape1D, shape2D, combine_count, dtype
     )
@@ -332,17 +337,17 @@ def test_clipped_mean(shape1D, shape2D, combine_count, dtype, sigma_data):
         # Test that the 1 sigma argument function works.
         clipped_mean_functor = MediocrePy.ClippedMean(sigma_lower, max_iter)
     
-    print "\t1D arrays"
+    print("\t1D arrays")
     actual = clipped_mean_functor(arrays1D)
     expected = py_combine(expected_combine, arrays1D)
     compare_1D(arrays1D, actual, expected)
     
-    print "\t2D arrays"
+    print("\t2D arrays")
     actual = clipped_mean_functor(arrays2D)
     expected = py_combine(expected_combine, arrays2D)
     compare_2D(arrays2D, actual, expected)
     
-    print "\t2D masked arrays"
+    print("\t2D masked arrays")
     actual = clipped_mean_functor(arrays2D, masks, nonzero_means_bad)
     masked_arrays = [py_mask(a, m, nonzero_means_bad)
         for a, m in zip(arrays2D, masks)]
@@ -350,15 +355,15 @@ def test_clipped_mean(shape1D, shape2D, combine_count, dtype, sigma_data):
     compare_2D(arrays2D, actual, expected)
 
 def test_scaled_mean(shape1D, shape2D, combine_count, dtype, sigma_data):
-    print "\n\x1b[1m\x1b[33mScaled mean test [%f %f] %i\x1b[0m" % sigma_data
+    print("\n\x1b[1m\x1b[33mScaled mean test [%f %f] %i\x1b[0m" % sigma_data)
     contiguous, nonzero_means_bad, arrays1D, arrays2D, masks = get_test_data(
         shape1D, shape2D, combine_count, dtype
     )
     
     sigma_lower, sigma_upper, max_iter = sigma_data
     
-    scale_factors = [rand.random() + .5 for i in xrange(combine_count)]
-    print "\x1b[36mScale factors: %s\x1b[0m" % repr(scale_factors)
+    scale_factors = [rand.random() + .5 for i in range(combine_count)]
+    print("\x1b[36mScale factors: %s\x1b[0m" % repr(scale_factors))
     
     expected_combine = lambda data: py_scaled_mean_combine(
         data,
@@ -390,17 +395,17 @@ def test_scaled_mean(shape1D, shape2D, combine_count, dtype, sigma_data):
                 max_iter=max_iter
             )
     
-    print "\t1D arrays"
+    print("\t1D arrays")
     actual = c_scaled_mean(arrays1D)
     expected = py_combine(expected_combine, arrays1D)
     compare_1D(arrays1D, actual, expected)
     
-    print "\t2D arrays"
+    print("\t2D arrays")
     actual = c_scaled_mean(arrays2D)
     expected = py_combine(expected_combine, arrays2D)
     compare_2D(arrays2D, actual, expected)
     
-    print "\t2D masked arrays"
+    print("\t2D masked arrays")
     actual = c_scaled_mean(arrays2D, masks)
     masked_arrays = [py_mask(a, m, nonzero_means_bad)
         for a, m in zip(arrays2D, masks)]
@@ -408,7 +413,7 @@ def test_scaled_mean(shape1D, shape2D, combine_count, dtype, sigma_data):
     compare_2D(arrays2D, actual, expected)
 
 def test_clipped_median(shape1D, shape2D, combine_count, dtype, sigma_data):
-    print "\n\x1b[1m\x1b[33mClipped median test [%f %f] %i\x1b[0m" % sigma_data
+    print("\n\x1b[1m\x1b[33mClipped median test [%f %f] %i\x1b[0m" % sigma_data)
     contiguous, nonzero_means_bad, arrays1D, arrays2D, masks = get_test_data(
         shape1D, shape2D, combine_count, dtype
     )
@@ -423,17 +428,17 @@ def test_clipped_median(shape1D, shape2D, combine_count, dtype, sigma_data):
         # Test that the 1 sigma argument function works.
         clipped_median_functor = MediocrePy.ClippedMedian(sigma_lower, max_iter)
     
-    print "\t1D arrays"
+    print("\t1D arrays")
     actual = clipped_median_functor(arrays1D)
     expected = py_combine(expected_combine, arrays1D)
     compare_1D(arrays1D, actual, expected)
     
-    print "\t2D arrays"
+    print("\t2D arrays")
     actual = clipped_median_functor(arrays2D)
     expected = py_combine(expected_combine, arrays2D)
     compare_2D(arrays2D, actual, expected)
     
-    print "\t2D masked arrays"
+    print("\t2D masked arrays")
     actual = clipped_median_functor(arrays2D, masks, nonzero_means_bad)
     masked_arrays = [py_mask(a, m, nonzero_means_bad)
         for a, m in zip(arrays2D, masks)]
@@ -441,18 +446,21 @@ def test_clipped_median(shape1D, shape2D, combine_count, dtype, sigma_data):
     compare_2D(arrays2D, actual, expected)
 
 def main():
-    print """
+    print("""
 \x1b[32m\x1b[1mNOTE:\x1b[0m
-These tests are not representative of the speed of the mediocre library
-(implemented in C). The library's results are being compared to results
-calculated using pure Python. Calculating these Python results takes up
-almost all of the testing time.\n"""
+
+Rare errors are to be expected, because the python implementation uses
+double precision floats while the mediocre library uses single
+precision. These tests are not representative of the speed of the
+mediocre library (implemented in C). The library's results are being
+compared to results calculated using pure Python. Calculating these
+Python results takes up almost all of the testing time.\n""")
     global seed, rand
     while 1:
         seed = hash(os.urandom(8))
         rand = random.Random(seed)
         
-        print "Seed = ", seed
+        print("Seed = ", seed)
         
         shape1D = (rand.randrange(40000, 70000),)
         shape2D = (rand.randrange(180, 240), rand.randrange(200, 300))
