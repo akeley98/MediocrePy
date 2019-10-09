@@ -618,9 +618,9 @@ int mediocre_combine(
             } else {
                 thread_count = i;
                 input_control->thread_count = thread_count;
-                const char* format =
+                static const char format[] =
                     "mediocre_combine: could only start %i threads";
-                char str[sizeof format + 10];
+                char str[sizeof format + 20];
                 sprintf(str, format, thread_count);
                 perror(str);
                 break;
