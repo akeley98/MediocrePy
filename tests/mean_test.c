@@ -91,6 +91,8 @@ static const int max_thread_count = 15;
 
 static uint16_t input_data[(max_array_count * max_bin_count) + max_offset + 1];
 
+static int speed_test;
+
 // Returns reference to static array[0...max_array_count-1] of shuffled numbers
 // in range [0, max_array_count).
 static const uint32_t* get_shuffled_array_counts() {
@@ -166,13 +168,13 @@ static void test_mean(
         exit(1);
     }
     input_pointers[random_dist_u32(generator, 0, array_count - 1)]
-        = input_page.ptr;
+        = (uint16_t*) input_page.ptr;
     
     // The output pointer will also be on a canary page.
     init_canary_page(
         &output_page, sizeof(float) * bin_count, offset1 * sizeof(float)
     );
-    float* output_pointer = output_page.ptr;    
+    float* output_pointer = (float*) output_page.ptr;    
     
     // Randomize the data in each input array.
     const uint32_t base = random_dist_u32(generator, 0, 3071);
@@ -207,6 +209,9 @@ static void test_mean(
     }
     
     size_t i = bin_count;
+    
+    if (speed_test) goto skip_check;
+    
     do {
         --i;
         float lower_bound = 0.0f, upper_bound = 65536.0f, clipped_mean;
@@ -245,6 +250,7 @@ static void test_mean(
         }
     } while (i != 0);
     
+skip_check:
     if (check_canary_page(output_page) < 0) {
         printf("Output buffer overrun.\n");
         exit(1);
@@ -290,6 +296,8 @@ static void test_mean(
         exit(1);
     }
     
+    if (speed_test) goto skip_check2;
+
     i = bin_count;
     do {
         --i;
@@ -351,7 +359,7 @@ static void test_mean(
             exit(1);
         }
     } while (i != 0);
-    
+skip_check2:
     free_canary_page(scale_page);
     free_canary_page(input_page);
     free_canary_page(output_page);
@@ -360,7 +368,13 @@ static void test_mean(
 int main() {
     generator = new_random();
     
-    for (size_t i = 0; i < 2000; ++i) {
+    if (getenv("SPEED_TEST")) {
+        speed_test = 1;
+        puts("SPEED_TEST environment variable defined.");
+        puts("Skipping correctness tests.");
+    }
+    
+    for (size_t i = 0; i < 20; ++i) {
         size_t array_count = random_dist_u32(
             generator, min_array_count, max_array_count);
         size_t bin_count = random_dist_u32(
