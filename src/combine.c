@@ -441,6 +441,9 @@ static void* functor_start_function(void* functor_control_pv) {
     return NULL;
 }
 
+// Used to schedule fake thread creation failures for testing.
+int mediocre_combine_fake_error_thread_idx = -1;
+
 /*  Function  that  prepares  the  environment  expected  by   the   command
  *  functions,   launches   the  functor  threads,  and  passes  control  to
  *  input.loop_function.  The  function  then  cleans  up  the   environment
@@ -584,6 +587,8 @@ int mediocre_combine(
         
         functor_control->even_input_buffer->nonzero_error = 0;
         
+        // Weird magic aligned_temp variable that is lazily initialized
+        // if requested by a mediocre_functor_aligned_temp call.
         functor_control->aligned_temp = NULL;
         
         // Now we can finally launch the thread since the semaphores are ready.
@@ -591,12 +596,21 @@ int mediocre_combine(
         functor_control->user_data = functor.user_data;
         functor_control->maximum_request = maximum_request;
         
-        status = pthread_create(
-            &functor_control->thread_id,
-            NULL,
-            functor_start_function,
-            functor_control
-        );
+        // 2019-10-10: I decided to add a way to fake thread creation
+        // errors in response to earlier undetected buffer overflow
+        // bug (I am truly ashamed by it)
+        if (mediocre_combine_fake_error_thread_idx == i) {
+            status = EAGAIN;
+        }
+        else {
+            status = pthread_create(
+                &functor_control->thread_id,
+                NULL,
+                functor_start_function,
+                functor_control
+            );
+        }
+        
         // We try to be failure-tolerant if a thread fails to start due to
         // lack of resources (EAGAIN). In that case we destroy the semaphores
         // created for this thread and report the issue to the user.

@@ -17,6 +17,7 @@
 
 #include <assert.h>
 #include <math.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -365,7 +366,18 @@ skip_check2:
     free_canary_page(output_page);
 }
 
+// 2019-10-10: Added a method to fake thread creation failures using sigquit.
+static void on_sigquit(int signum) {
+    (void)signum;
+    extern int mediocre_combine_fake_error_thread_idx;
+    
+    mediocre_combine_fake_error_thread_idx =
+        mediocre_combine_fake_error_thread_idx == 2 ? 0 : 2;
+}
+
 int main() {
+    signal(SIGQUIT, on_sigquit);
+    
     generator = new_random();
     
     if (getenv("SPEED_TEST")) {
