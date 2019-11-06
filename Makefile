@@ -1,4 +1,4 @@
-MYFLAGS = -mavx -D_POSIX_C_SOURCE=201112L -Wall -Wextra -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=implicit-function-declaration -Wno-missing-field-initializers -g
+MYFLAGS = -mavx -D_POSIX_C_SOURCE=201112L -Wall -Wextra -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=implicit-function-declaration -Wno-missing-field-initializers -Wno-implicit-fallthrough -g
 
 # Change these commands if you want to change the C and C++ compilers.
 CC = clang $(MYFLAGS) -g -pg -fPIC -O2 -c -std=gnu99 -I include -I src/inline
