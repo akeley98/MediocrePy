@@ -1,0 +1,7 @@
+make-B-hack
+run
+*.i
+*.ii
+*-deps.txt
+*.s
+*.o
