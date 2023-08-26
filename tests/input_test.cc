@@ -41,8 +41,8 @@ static const uint32_t max_axis_size = 4096;
 static const uint32_t min_combine_count = 5;
 static const uint32_t max_combine_count = 12;
 
-static struct Random* generator = new_random();
-const auto seed = get_seed(generator);
+static struct Random* generator;
+static uint64_t seed;
 MediocreFunctor mean_functor = mediocre_mean_functor();
 
 static std::vector<float> mean(MediocreInput input) {
@@ -429,6 +429,8 @@ static void test_2D() noexcept {
 }
 
 int main() {
+    generator = new_random();
+    seed = get_seed(generator);
     for (int i = 0; i < 80; ++i) {
         for (int j = 0; j < 12; ++j) {
             test_2D();
