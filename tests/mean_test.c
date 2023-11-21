@@ -128,6 +128,12 @@ static void random_fill(uint16_t* out, size_t bin_count, uint32_t base) {
     }
 }
 
+static double fp64_fma(double a, double b, double c)
+{
+    __m128d tmp = _mm_fmadd_sd(_mm_set_sd(a), _mm_set_sd(b), _mm_set_sd(c));
+    return _mm_cvtsd_f64(tmp);
+}
+
 static void test_mean(
     size_t array_count,
     size_t bin_count,
@@ -229,8 +235,8 @@ static void test_mean(
                 }
             }
             double sd = sqrt(ss / count);
-            float new_lb = (float)(clipped_mean - sigma_lower*sd);
-            float new_ub = (float)(clipped_mean + sigma_upper*sd);
+            float new_lb = (float)fp64_fma(-sigma_lower, sd, clipped_mean);
+            float new_ub = (float)fp64_fma(+sigma_upper, sd, clipped_mean);
             
             lower_bound = (new_lb < lower_bound) ? lower_bound : new_lb;
             upper_bound = (new_ub > upper_bound) ? upper_bound : new_ub;

@@ -134,28 +134,17 @@ static inline struct ClipBoundsM256 get_new_clip_bounds(
     // Now we have the sum of the squared deviations and we can
     // use it to get the standard deviation. Use this to calculate
     // the lower and upper clip bounds for the next iteration.
-    // (Yes, I know about FMA, but not all processors do ;_; )
     __m256d const lo_avg_ss = _mm256_div_pd(lo_ss, lo_clipped_count);
     __m256d const hi_avg_ss = _mm256_div_pd(hi_ss, hi_clipped_count);
     __m256d const lo_sd = _mm256_sqrt_pd(lo_avg_ss);
     __m256d const hi_sd = _mm256_sqrt_pd(hi_avg_ss);
 
     __m256 const new_lower_bound = _mm256_setr_m128(
-        _mm256_cvtpd_ps(
-            _mm256_sub_pd(lo_center, _mm256_mul_pd(lo_sd, sigma_lower))
-        ),
-        _mm256_cvtpd_ps(
-            _mm256_sub_pd(hi_center, _mm256_mul_pd(hi_sd, sigma_lower))
-        )
-    );
+        _mm256_cvtpd_ps(_mm256_fnmadd_pd(lo_sd, sigma_lower, lo_center)),
+        _mm256_cvtpd_ps(_mm256_fnmadd_pd(hi_sd, sigma_lower, hi_center)));
     __m256 const new_upper_bound = _mm256_setr_m128(
-        _mm256_cvtpd_ps(
-            _mm256_add_pd(lo_center, _mm256_mul_pd(lo_sd, sigma_upper))
-        ),
-        _mm256_cvtpd_ps(
-            _mm256_add_pd(hi_center, _mm256_mul_pd(hi_sd, sigma_upper))
-        )
-    );
+        _mm256_cvtpd_ps(_mm256_fmadd_pd(lo_sd, sigma_upper, lo_center)),
+        _mm256_cvtpd_ps(_mm256_fmadd_pd(hi_sd, sigma_upper, hi_center)));
     bounds.lower = _mm256_max_ps(bounds.lower, new_lower_bound);
     bounds.upper = _mm256_min_ps(bounds.upper, new_upper_bound);
     return bounds;
