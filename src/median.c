@@ -29,7 +29,7 @@
 #include "mediocre.h"
 #include "sigmautil.h"
 
-static const size_t max_combine_count = 1000000;
+static const size_t max_combine_count = 1u << 30;
 
 /*  Sort the numbers within the 8 lanes of the to_sort array[0 ...  count-1]
  *  of vectors passed in. If it makes more sense, think of it like calling a
@@ -595,7 +595,6 @@ static void bubble_sort_m256(__m256* array, size_t count) {
  *  vectors long, both of which have all 8  lanes  of  floats  in  ascending
  *  order.  The output is written into the output array, which must be of at
  *  least size l_size + r_size and must not overlap with  the  input  array.
- *  l_size + r_size must not exceed 16777215.
  *  
  *  The implementation of this function is very difficult to explain.
  */
@@ -609,13 +608,7 @@ static void merge_m256(
         }
         return;
     }
-    // We will be using single-precision floats to represent the array
-    // index, so make sure it's small enough to fit with full precision. Check
-    // that the high 8 bits are 0, because float has only 24 bits of precision.
-    if ((l_size + r_size) & ~0xffffff) {
-        fprintf(stderr, "mediocre internal error: merge_m256\n");
-        abort();
-    }
+
     assert(is_sorted_m256(in, l_size));
     assert(is_sorted_m256(in + l_size, r_size));
     
@@ -670,23 +663,24 @@ static void merge_m256(
      *  one-choice  modes,  and  true in a lane only in the one iteration of
      *  transition between the two modes.
      */
-    __m256 const one = _mm256_set1_ps(1.0f);
-    __m256 const end_l = _mm256_set1_ps((float)(int)l_size);
-    __m256 const end_r = _mm256_set1_ps((float)(int)total_size);
+    __m256i const one = _mm256_set1_epi32(1);
+    __m256i const end_l = _mm256_set1_epi32((int)l_size);
+    __m256i const end_r = _mm256_set1_epi32((int)total_size);
     
     __m256 old_data = in[0];
     __m256 new_data = in[l_size];
-    __m256 old_index = _mm256_setzero_ps();
-    __m256 inc_old_index = one;
-    __m256 new_index = end_l;
-    __m256 inc_new_index = _mm256_add_ps(one, end_l);
-    __m256 empty_partition_mask = _mm256_setzero_ps();
-    __m256 mask = _mm256_cmp_ps(old_data, new_data, _CMP_GE_OQ);
+    __m256i old_index = _mm256_setzero_si256();
+    __m256i inc_old_index = one;
+    __m256i new_index = end_l;
+    __m256i inc_new_index = _mm256_add_epi32(one, end_l);
+    __m256i empty_partition_mask = _mm256_setzero_si256();
+    __m256i mask = _mm256_castps_si256(_mm256_cmp_ps(old_data, new_data,
+                                                     _CMP_GE_OQ));
     
     out[0] = _mm256_min_ps(old_data, new_data);
     old_data = _mm256_max_ps(old_data, new_data);
-    old_index = _mm256_blendv_ps(new_index, old_index, mask);
-    new_index = _mm256_blendv_ps(inc_old_index, inc_new_index, mask);
+    old_index = _mm256_blendv_epi8(new_index, old_index, mask);
+    new_index = _mm256_blendv_epi8(inc_old_index, inc_new_index, mask);
     
     for (size_t i = 1; i != total_size; ++i) {
         __m256 const at_end = _mm256_or_ps(
@@ -699,29 +693,34 @@ static void merge_m256(
         inc_old_index = _mm256_add_ps(one, old_index);
         inc_new_index = _mm256_add_ps(one, new_index);
         
-        // This part is slow :(
-        // NOTE: AVX2 introduces gather instructions. Maybe detect AVX2
-        // support one day and use that if possible. Also AVX2 has integer
-        // instructions so we can just do the index logic with integers
-        // instead of converting back-and-forth from floats.
-        __m256i new_index_i = _mm256_cvtps_epi32(new_index);
-        int32_t i0 = _mm256_extract_epi32(new_index_i, 0);
-        int32_t i1 = _mm256_extract_epi32(new_index_i, 1);
-        int32_t i2 = _mm256_extract_epi32(new_index_i, 2);
-        int32_t i3 = _mm256_extract_epi32(new_index_i, 3);
-        int32_t i4 = _mm256_extract_epi32(new_index_i, 4);
-        int32_t i5 = _mm256_extract_epi32(new_index_i, 5);
-        int32_t i6 = _mm256_extract_epi32(new_index_i, 6);
-        int32_t i7 = _mm256_extract_epi32(new_index_i, 7);
-        
-        new_data = _mm256_blend_ps(new_data, in[i0], 1 << 0);
-        new_data = _mm256_blend_ps(new_data, in[i1], 1 << 1);
-        new_data = _mm256_blend_ps(new_data, in[i2], 1 << 2);
-        new_data = _mm256_blend_ps(new_data, in[i3], 1 << 3);
-        new_data = _mm256_blend_ps(new_data, in[i4], 1 << 4);
-        new_data = _mm256_blend_ps(new_data, in[i5], 1 << 5);
-        new_data = _mm256_blend_ps(new_data, in[i6], 1 << 6);
-        new_data = _mm256_blend_ps(new_data, in[i7], 1 << 7);
+        // For some unknown reason, this mess below is actually way faster than
+        // the gather instruction (this is with Intel 11th gen core...)
+        // Maybe it can be cleverly optimized further to avoid redundant reads.
+        if (1) {
+            int32_t i0 = _mm256_extract_epi32(new_index, 0);
+            int32_t i1 = _mm256_extract_epi32(new_index, 1);
+            int32_t i2 = _mm256_extract_epi32(new_index, 2);
+            int32_t i3 = _mm256_extract_epi32(new_index, 3);
+            int32_t i4 = _mm256_extract_epi32(new_index, 4);
+            int32_t i5 = _mm256_extract_epi32(new_index, 5);
+            int32_t i6 = _mm256_extract_epi32(new_index, 6);
+            int32_t i7 = _mm256_extract_epi32(new_index, 7);
+
+            new_data = _mm256_blend_ps(new_data, in[i0], 1 << 0);
+            new_data = _mm256_blend_ps(new_data, in[i1], 1 << 1);
+            new_data = _mm256_blend_ps(new_data, in[i2], 1 << 2);
+            new_data = _mm256_blend_ps(new_data, in[i3], 1 << 3);
+            new_data = _mm256_blend_ps(new_data, in[i4], 1 << 4);
+            new_data = _mm256_blend_ps(new_data, in[i5], 1 << 5);
+            new_data = _mm256_blend_ps(new_data, in[i6], 1 << 6);
+            new_data = _mm256_blend_ps(new_data, in[i7], 1 << 7);
+        }
+        else {
+            __m256i const zero_to_seven = _mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0);
+            __m256i gather_index = _mm256_add_epi32(_mm256_slli_epi32(new_index, 3),
+                                                    zero_to_seven);
+            new_data = _mm256_i32gather_ps((float const*)in, gather_index, 4);
+        }
         
         mask = _mm256_cmp_ps(old_data, new_data, _CMP_GT_OQ);
         mask = _mm256_or_ps(mask, empty_partition_mask);
@@ -729,10 +728,11 @@ static void merge_m256(
         // It really bothers me how blendv reads in the exact opposite order
         // as a ternary statement. condition ? if_true : if_false becomes
         // blendv(if_false, if_true, condition). RRRAAUURGH.
-        out[i] = _mm256_blendv_ps(old_data, new_data, mask);
-        old_data = _mm256_blendv_ps(new_data, old_data, mask);
-        old_index = _mm256_blendv_ps(new_index, old_index, mask);
-        new_index = _mm256_blendv_ps(inc_old_index, inc_new_index, mask);
+        const __m256 fp_mask = _mm256_castsi256_ps(mask);
+        out[i] = _mm256_blendv_ps(old_data, new_data, fp_mask);
+        old_data = _mm256_blendv_ps(new_data, old_data, fp_mask);
+        old_index = _mm256_blendv_epi8(new_index, old_index, mask);
+        new_index = _mm256_blendv_epi8(inc_old_index, inc_new_index, mask);
     }
 }
 
