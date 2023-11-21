@@ -12,7 +12,7 @@ If you are planning to use this library in a Python program, first build the C l
 
 ## First, a word of warning
 
-Internally, the library uses 256-bit vector types everywhere. This will require the AVX2 instruction set (most >= 2014 Intel/AMD CPUs). If your computer has a CPU older than this, or a non-x64 CPU (e.g. Apple Silicon), it won't be able to run this code (not because the CPU is too slow, but because it won't understand the instructions used in the program. It would be like reading Dr. Seuss to your goldfish).
+Internally, the library uses 256-bit vector types everywhere. This will require the FMA3 and AVX2 instruction sets (most >= 2014 Intel/AMD CPUs). If your computer has a CPU older than this, or a non-x64 CPU (e.g. Apple Silicon), it won't be able to run this code (not because the CPU is too slow, but because it won't understand the instructions used in the program. It would be like reading Dr. Seuss to your goldfish).
 
 Keep in mind that compilers are often no help when it comes to memory alignment for such vector data types, so be vigilant. If you are a user of the library just looking to use the default combine and input methods, you don't have to worry about alignment all that much.
 
