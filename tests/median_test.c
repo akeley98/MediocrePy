@@ -273,7 +273,7 @@ static void test_median(
 }
 
 int main() {
-    generator = new_random();
+    generator = new_random1(1337);
     
     for (size_t i = 0; i < test_count; ++i) {
         size_t array_count = random_dist_u32(
