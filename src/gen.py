@@ -3,6 +3,7 @@ import os
 from exo import *
 from exo.stdlib.scheduling import *
 from exo.platforms.x86 import *
+from exo.stdlib.stdlib import vectorize
 
 @instr("{out_data} = _mm256_add_ps({out_data}, {y_data});")
 def MY256_iadd_ps(out: [f32][8] @ AVX2, y: [f32][8] @ AVX2):
@@ -37,19 +38,56 @@ def exo_mean_chunk_original_m256(
         for lane in seq(0, 8):
             out[c, lane] = tmp[lane]
 
-avx = rename(exo_mean_chunk_original_m256, "exo_mean_chunk_m256")
-avx = set_memory(avx, "accum", AVX2)
-avx = set_memory(avx, "tmp", AVX2)
-avx = set_memory(avx, "divisor", AVX2)
-avx = replace_all(avx, mm256_broadcast_ss)
-avx = replace_all(avx, mm256_setzero_ps)
-avx = replace_all(avx, mm256_add_ps)
-avx = replace_all(avx, MY256_iadd_ps)
-avx = replace_all(avx, mm256_div_ps)
-avx = replace_all(avx, mm256_loadu_ps)
-avx = replace_all(avx, mm256_storeu_ps)
-print(avx)
-exo_mean_chunk_m256 = avx
+@proc
+def exo_mean_chunk_lane_outer_loop_m256(
+        combine_count : size,
+        combine_count_f32 : f32[1],
+        chunk_count : size,
+        out : f32[chunk_count, 8] @ DRAM,
+        in2D : f32[chunk_count, combine_count, 8]):
+    for lane in seq(0, 8):
+        for c in seq(0, chunk_count):
+            accum : f32[8]
+            tmp : f32[8]
+            tmp2 : f32[8]
+            divisor : f32[8]
+            accum[lane] = 0
+            for i in seq(0, combine_count):
+                tmp[lane] = in2D[c, i, lane]
+                tmp2[lane] = accum[lane] + tmp[lane]
+                accum[lane] = tmp2[lane]
+            divisor[lane] = combine_count_f32[0]
+            tmp[lane] = accum[lane] / divisor[lane]
+            out[c, lane] = tmp[lane]
+
+
+avx_f32_insts = [
+    mm256_broadcast_ss,
+    mm256_setzero_ps,
+    mm256_add_ps,
+    MY256_iadd_ps,
+    mm256_div_ps,
+    mm256_loadu_ps,
+    mm256_storeu_ps,
+]
+
+if True:
+    avx = rename(exo_mean_chunk_original_m256, "exo_mean_chunk_m256")
+    avx = set_memory(avx, "accum", AVX2)
+    avx = set_memory(avx, "tmp", AVX2)
+    avx = set_memory(avx, "divisor", AVX2)
+    avx = replace_all(avx, mm256_broadcast_ss)
+    avx = replace_all(avx, mm256_setzero_ps)
+    avx = replace_all(avx, mm256_add_ps)
+    avx = replace_all(avx, MY256_iadd_ps)
+    avx = replace_all(avx, mm256_div_ps)
+    avx = replace_all(avx, mm256_loadu_ps)
+    avx = replace_all(avx, mm256_storeu_ps)
+    exo_mean_chunk_m256 = avx
+else:
+    avx = rename(exo_mean_chunk_lane_outer_loop_m256, "exo_mean_chunk_m256")
+    avx = vectorize(avx, avx.find_loop("lane"), 8, "f32", AVX2, avx_f32_insts, rules=[])
+    exo_mean_chunk_m256 = avx
 
 @proc
 def sin_8(out : f32[8] @ DRAM, in_ : f32[8] @ DRAM):
@@ -140,6 +178,7 @@ def exo_clipped_mean_chunk_original_m256(
     # end loop for lane in seq(0, ...)
 
 avx = rename(exo_clipped_mean_chunk_original_m256, "exo_clipped_mean_chunk_m256")
-#avx = reorder_loops(avx, "lane c")
+avx = reorder_loops(avx, "lane c")
 #avx = repeat(reorder_loops)(avx, "c lane")
+print(avx)
 exo_clipped_mean_chunk_m256 = avx
