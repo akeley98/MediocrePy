@@ -22,6 +22,8 @@
 
 #include <immintrin.h>
 
+#include "maybe_fma.h"
+
 /*  Structure representing eight lower  and  upper  bounds  used  for  sigma
  *  clipping.  Each  of  the  eight  lanes  represents  the bounds for eight
  *  independent positions of the arrays being sigma clipped.
@@ -140,11 +142,11 @@ static inline struct ClipBoundsM256 get_new_clip_bounds(
     __m256d const hi_sd = _mm256_sqrt_pd(hi_avg_ss);
 
     __m256 const new_lower_bound = _mm256_setr_m128(
-        _mm256_cvtpd_ps(_mm256_fnmadd_pd(lo_sd, sigma_lower, lo_center)),
-        _mm256_cvtpd_ps(_mm256_fnmadd_pd(hi_sd, sigma_lower, hi_center)));
+        _mm256_cvtpd_ps(m256d_nmadd(lo_sd, sigma_lower, lo_center)),
+        _mm256_cvtpd_ps(m256d_nmadd(hi_sd, sigma_lower, hi_center)));
     __m256 const new_upper_bound = _mm256_setr_m128(
-        _mm256_cvtpd_ps(_mm256_fmadd_pd(lo_sd, sigma_upper, lo_center)),
-        _mm256_cvtpd_ps(_mm256_fmadd_pd(hi_sd, sigma_upper, hi_center)));
+        _mm256_cvtpd_ps(m256d_madd(lo_sd, sigma_upper, lo_center)),
+        _mm256_cvtpd_ps(m256d_madd(hi_sd, sigma_upper, hi_center)));
     bounds.lower = _mm256_max_ps(bounds.lower, new_lower_bound);
     bounds.upper = _mm256_min_ps(bounds.upper, new_upper_bound);
     return bounds;

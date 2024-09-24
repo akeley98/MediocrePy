@@ -25,6 +25,7 @@
 
 #include "mediocre.h"
 #include "testing.h"
+#include "../src/inline/maybe_fma.h"
 
 static int u16_input_loop(
     MediocreInputControl* control,
@@ -85,7 +86,6 @@ static const size_t min_array_count = 1;       // for alignment bugs.
 static const size_t max_array_count = 601;
 static const size_t min_bin_count = 1;
 static const size_t max_bin_count = 600000;
-static const uint32_t min_max_iter = 0;
 static const uint32_t max_max_iter = 15;
 static const int max_thread_count = 15;
 
@@ -126,12 +126,6 @@ static void random_fill(uint16_t* out, size_t bin_count, uint32_t base) {
         
         out[i] = a + base;
     }
-}
-
-static double fp64_fma(double a, double b, double c)
-{
-    __m128d tmp = _mm_fmadd_sd(_mm_set_sd(a), _mm_set_sd(b), _mm_set_sd(c));
-    return _mm_cvtsd_f64(tmp);
 }
 
 static void test_mean(
@@ -189,7 +183,9 @@ static void test_mean(
     int thread_count = (int)random_dist_u32(generator, 1, max_thread_count);
     
     // Now test the clipped mean function.
-    printf("sigma[-%f, %f] max_iter %zi\n", sigma_lower, sigma_upper, max_iter);
+    printf("sigma[-%f, %f] max_iter %s%zi\x1b[0m\n",
+           sigma_lower, sigma_upper,
+           max_iter == 0 ? "\x1b[1m\x1b[31m" : "", max_iter);
     printf("thread_count = %i\n", thread_count);
     ftime(&timer_begin);
     
@@ -235,8 +231,8 @@ static void test_mean(
                 }
             }
             double sd = sqrt(ss / count);
-            float new_lb = (float)fp64_fma(-sigma_lower, sd, clipped_mean);
-            float new_ub = (float)fp64_fma(+sigma_upper, sd, clipped_mean);
+            float new_lb = (float)fp64_madd(-sigma_lower, sd, clipped_mean);
+            float new_ub = (float)fp64_madd(+sigma_upper, sd, clipped_mean);
             
             lower_bound = (new_lb < lower_bound) ? lower_bound : new_lb;
             upper_bound = (new_ub > upper_bound) ? upper_bound : new_ub;
@@ -268,7 +264,9 @@ static void test_mean(
         scale_factors[a] = 0.5 + 1e-3 * (random_u32(generator) % 1000);
     }
     
-    printf("sigma[-%f, %f] max_iter %zi\n", sigma_lower, sigma_upper, max_iter);
+    printf("sigma[-%f, %f] max_iter %s%zi\x1b[0m\n",
+           sigma_lower, sigma_upper,
+           max_iter == 0 ? "\x1b[1m\x1b[31m" : "", max_iter);
     printf("thread_count = %i\n", thread_count);
     ftime(&timer_begin);
     
@@ -376,9 +374,10 @@ int main() {
         size_t offset1 = random_dist_u32(generator, 0, max_offset);
         double sigma_lower = 1.0f + 0.25f * random_dist_u32(generator, 0, 12);
         double sigma_upper = 1.0f + 0.25f * random_dist_u32(generator, 0, 12);
-        size_t max_iter = random_dist_u32(
-            generator, min_max_iter, max_max_iter
-        );
+        size_t max_iter = random_dist_u32(generator, 1, 2 * max_max_iter + 1);
+        if (max_iter > max_max_iter) {
+            max_iter = 0;  // 50% chance of 0 iterations
+        }
         test_mean(
             array_count, bin_count, offset0, offset1,
             sigma_lower, sigma_upper, max_iter
