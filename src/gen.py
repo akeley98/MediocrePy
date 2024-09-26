@@ -14,31 +14,6 @@ def MY256_iadd_ps(out: [f32][8] @ AVX2, y: [f32][8] @ AVX2):
         out[i] += y[i]
 
 @proc
-def exo_mean_chunk_original_m256(
-        combine_count : size,
-        combine_count_f32 : f32[1],
-        chunk_count : size,
-        out : f32[chunk_count, 8] @ DRAM,
-        in2D : f32[chunk_count, combine_count, 8]):
-    for c in seq(0, chunk_count):
-        accum : f32[8]
-        tmp : f32[8]
-        divisor : f32[8]
-        for lane in seq(0, 8):
-            accum[lane] = 0
-        for i in seq(0, combine_count):
-            for lane in seq(0, 8):
-                tmp[lane] = in2D[c, i, lane]
-            for lane in seq(0, 8):
-                accum[lane] += tmp[lane]
-        for lane in seq(0, 8):
-            divisor[lane] = combine_count_f32[0]
-        for lane in seq(0, 8):
-            tmp[lane] = accum[lane] / divisor[lane]
-        for lane in seq(0, 8):
-            out[c, lane] = tmp[lane]
-
-@proc
 def exo_mean_chunk_lane_outer_loop_m256(
         combine_count : size,
         combine_count_f32 : f32[1],
@@ -49,16 +24,31 @@ def exo_mean_chunk_lane_outer_loop_m256(
         for c in seq(0, chunk_count):
             accum : f32[8]
             tmp : f32[8]
-            tmp2 : f32[8]
             divisor : f32[8]
             accum[lane] = 0
             for i in seq(0, combine_count):
                 tmp[lane] = in2D[c, i, lane]
-                tmp2[lane] = accum[lane] + tmp[lane]
-                accum[lane] = tmp2[lane]
+                accum[lane] += tmp[lane]
             divisor[lane] = combine_count_f32[0]
             tmp[lane] = accum[lane] / divisor[lane]
             out[c, lane] = tmp[lane]
+
+@proc
+def exo_mean_chunk_better_m256(
+        combine_count : size,
+        combine_count_f32 : f32[1],
+        chunk_count : size,
+        out : f32[chunk_count, 8] @ DRAM,
+        in2D : f32[chunk_count, combine_count, 8]):
+    for lane in seq(0, 8):
+        for c in seq(0, chunk_count):
+            accum : f32
+            divisor : f32
+            accum = 0
+            for i in seq(0, combine_count):
+                accum += in2D[c, i, lane]
+            divisor = combine_count_f32[0]
+            out[c, lane] = accum / divisor
 
 
 avx_f32_insts = [
@@ -72,22 +62,29 @@ avx_f32_insts = [
 ]
 
 if True:
-    avx = rename(exo_mean_chunk_original_m256, "exo_mean_chunk_m256")
+    avx = rename(exo_mean_chunk_lane_outer_loop_m256, "exo_mean_chunk_m256")
+    avx = reorder_loops(avx, "lane c")
+    avx = lift_alloc(avx, "accum")
+    avx = lift_alloc(avx, "tmp")
+    avx = lift_alloc(avx, "divisor")
+    avx = fission(avx, avx.find("accum[_] = _").after())
+    avx = fission(avx, avx.find("for i in _:_").after())
+    avx = fission(avx, avx.find("divisor[lane] = _").after())
+    avx = fission(avx, avx.find("tmp[lane] = _ #1").after())
+    avx = reorder_loops(avx, "lane i")
+    avx = fission(avx, avx.find("tmp[lane] = _").after())
     avx = set_memory(avx, "accum", AVX2)
     avx = set_memory(avx, "tmp", AVX2)
     avx = set_memory(avx, "divisor", AVX2)
-    avx = replace_all(avx, mm256_broadcast_ss)
-    avx = replace_all(avx, mm256_setzero_ps)
-    avx = replace_all(avx, mm256_add_ps)
-    avx = replace_all(avx, MY256_iadd_ps)
-    avx = replace_all(avx, mm256_div_ps)
-    avx = replace_all(avx, mm256_loadu_ps)
-    avx = replace_all(avx, mm256_storeu_ps)
+    for inst in avx_f32_insts:
+        avx = replace_all(avx, inst)
     exo_mean_chunk_m256 = avx
 else:
     avx = rename(exo_mean_chunk_lane_outer_loop_m256, "exo_mean_chunk_m256")
-    avx = vectorize(avx, avx.find_loop("lane"), 8, "f32", AVX2, avx_f32_insts, rules=[])
-    exo_mean_chunk_m256 = avx
+    avx = reorder_loops(avx, "lane c")
+    avx = lift_alloc(avx, "accum")
+    avx = lift_alloc(avx, "tmp")
+    avx = lift_alloc(avx, "divisor")
 
 @proc
 def sin_8(out : f32[8] @ DRAM, in_ : f32[8] @ DRAM):
@@ -180,5 +177,4 @@ def exo_clipped_mean_chunk_original_m256(
 avx = rename(exo_clipped_mean_chunk_original_m256, "exo_clipped_mean_chunk_m256")
 avx = reorder_loops(avx, "lane c")
 #avx = repeat(reorder_loops)(avx, "c lane")
-print(avx)
 exo_clipped_mean_chunk_m256 = avx
