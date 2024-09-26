@@ -12,7 +12,7 @@ EXOCC = exocc
 # object files, so that I can see what the hell the compiler is actually up to.
 
 bin/mediocre.so: bin/combine.s bin/input.s bin/mean.s bin/median.s bin/exo_file.s
-	$(LinkLib) bin/combine.s bin/input.s bin/mean.s bin/median.s -o bin/mediocre.so
+	$(LinkLib) bin/combine.s bin/input.s bin/mean.s bin/median.s bin/exo_file.s -o bin/mediocre.so
 
 
 
