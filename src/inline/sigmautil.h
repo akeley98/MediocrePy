@@ -127,11 +127,8 @@ static inline struct ClipBoundsM256 get_new_clip_bounds(
         __m256d const hi_diffs = _mm256_cvtps_pd(
             _mm256_extractf128_ps(diffs, 1)
         );
-        __m256d lo_sq = _mm256_mul_pd(lo_diffs, lo_diffs);
-        __m256d hi_sq = _mm256_mul_pd(hi_diffs, hi_diffs);
-        
-        hi_ss = _mm256_add_pd(hi_ss, hi_sq);
-        lo_ss = _mm256_add_pd(lo_ss, lo_sq);
+        hi_ss = _mm256_fmadd_pd(hi_diffs, hi_diffs, hi_ss);
+        lo_ss = _mm256_fmadd_pd(lo_diffs, lo_diffs, lo_ss);
     }
     // Now we have the sum of the squared deviations and we can
     // use it to get the standard deviation. Use this to calculate
