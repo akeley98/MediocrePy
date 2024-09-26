@@ -317,7 +317,7 @@ static int clipped_loop_function(
     const __m256d sigma_upper = _mm256_set1_pd(arguments_ptr->sigma_upper);
     const size_t max_iter = arguments_ptr->max_iter;
 
-    const bool use_exo = max_iter == 0;
+    const bool use_exo = 1;
 
     MediocreFunctorCommand command;
 
@@ -338,7 +338,7 @@ static int clipped_loop_function(
             );
             return E2BIG;
         } else if (use_exo) {
-            if (max_iter == 0) {
+            if (0) {
                 float combine_count_f32 = command.dimension.combine_count;
                 exo_mean_chunk_m256(0, command.dimension.combine_count,
                                     &combine_count_f32,

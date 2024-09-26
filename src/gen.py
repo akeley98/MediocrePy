@@ -4,6 +4,44 @@ from exo import *
 from exo.stdlib.scheduling import *
 from exo.platforms.x86 import *
 from exo.stdlib.stdlib import vectorize
+from exo.memory import Memory, MemGenError
+
+class MYAVX512D(Memory):
+    @classmethod
+    def global_(cls):
+        return "#include <immintrin.h>"
+
+    @classmethod
+    def can_read(cls):
+        return False
+
+    @classmethod
+    def alloc(cls, new_name, prim_type, shape, srcinfo):
+        if not shape:
+            raise MemGenError(f"{srcinfo}: AVX512 vectors are not scalar values")
+        if not prim_type == "double":
+            raise MemGenError(f"{srcinfo}: AVX512F64 vectors must be f64")
+        if not shape[-1].isdecimal() or int(shape[-1]) != 8:
+            raise MemGenError(f"{srcinfo}: AVX512F64 vectors must be 8-wide")
+        shape = shape[:-1]
+        if shape:
+            result = f'__m512d {new_name}[{"][".join(map(str, shape))}];'
+        else:
+            result = f"__m512d {new_name};"
+        return result
+
+    @classmethod
+    def free(cls, new_name, prim_type, shape, srcinfo):
+        return ""
+
+    @classmethod
+    def window(cls, basetyp, baseptr, indices, strides, srcinfo):
+        assert strides[-1] == "1"
+        idxs = indices[:-1] or ""
+        if idxs:
+            idxs = "[" + "][".join(idxs) + "]"
+        return f"{baseptr}{idxs}"
+
 
 @instr("{out_data} = _mm256_add_ps({out_data}, {y_data});")
 def MY256_iadd_ps(out: [f32][8] @ AVX2, y: [f32][8] @ AVX2):
@@ -12,6 +50,189 @@ def MY256_iadd_ps(out: [f32][8] @ AVX2, y: [f32][8] @ AVX2):
 
     for i in seq(0, 8):
         out[i] += y[i]
+
+@instr("{out_data} = _mm256_min_ps({out_data}, _mm512_cvtpd_ps({y_data}));")
+def MY512_imin_ps_pd(out: [f32][8] @ AVX2, y: [f64][8] @ MYAVX512D):
+    assert stride(out, 0) == 1
+    assert stride(y, 0) == 1
+
+    for i in seq(0, 8):
+        out[i] = min(out[i], y[i])
+
+@instr("{out_data} = _mm256_max_ps({out_data}, _mm512_cvtpd_ps({y_data}));")
+def MY512_imax_ps_pd(out: [f32][8] @ AVX2, y: [f64][8] @ MYAVX512D):
+    assert stride(out, 0) == 1
+    assert stride(y, 0) == 1
+
+    for i in seq(0, 8):
+        out[i] = max(out[i], y[i])
+
+@instr("{dst_data} = _mm256_set1_ps({src_data});")
+def MY256_set1_ps(
+    dst: [f32][16] @ AVX512,
+    src: [f32][1],
+):
+    assert stride(dst, 0) == 1
+
+    for i in seq(0, 8):
+        dst[i] = src[0]
+
+@instr(
+    """{z_data} = _mm256_blendv_ps ({z_data}, {y_data}, _mm256_cmp_ps ({x_data}, {v_data}, _CMP_LT_OQ));"""
+)
+def MY256_select4_ps(
+    x: [f32][8] @ AVX2,
+    v: [f32][8] @ AVX2,
+    y: [f32][8] @ AVX2,
+    z: [f32][8] @ AVX2,
+):
+    # WARNING: This instruction above use a lower precision
+    #    float32 (C float) than the implementation of
+    #    the builtin which uses float64 (C double)
+    assert stride(x, 0) == 1
+    assert stride(v, 0) == 1
+    assert stride(y, 0) == 1
+    assert stride(z, 0) == 1
+
+    for i in seq(0, 8):
+        z[i] = select(x[i], v[i], y[i], z[i])
+
+# XXX this doesn't seem to work, matches even when the z's don't match.
+@instr(
+    """{z_data} = _mm256_blendv_ps ({z_data}, {y_data}, _mm256_cmp_ps ({z_data}, {v_data}, _CMP_LT_OQ  ));"""
+)
+def MY256_select14_ps(
+    v: [f32][8] @ AVX2,
+    y: [f32][8] @ AVX2,
+    z: [f32][8] @ AVX2,
+):
+    # WARNING: This instruction above use a lower precision
+    #    float32 (C float) than the implementation of
+    #    the builtin which uses float64 (C double)
+    assert stride(v, 0) == 1
+    assert stride(y, 0) == 1
+    assert stride(z, 0) == 1
+
+    for i in seq(0, 8):
+        z[i] = select(z[i], v[i], y[i], z[i])
+
+@instr(
+    """{z_data} = _mm256_blendv_ps ({z_data}, {y_data}, _mm256_cmp_ps ({x_data}, {z_data}, _CMP_LT_OQ));"""
+)
+def MY256_select24_ps(
+    x: [f32][8] @ AVX2,
+    y: [f32][8] @ AVX2,
+    z: [f32][8] @ AVX2,
+):
+    # WARNING: This instruction above use a lower precision
+    #    float32 (C float) than the implementation of
+    #    the builtin which uses float64 (C double)
+    assert stride(x, 0) == 1
+    assert stride(y, 0) == 1
+    assert stride(z, 0) == 1
+
+    for i in seq(0, 8):
+        z[i] = select(x[i], z[i], y[i], z[i])
+
+@instr(
+    """{dst_data} = _mm512_setzero_pd();""")
+def MY512_setzero_pd(dst: [f64][8] @ MYAVX512D):
+    assert stride(dst, 0) == 1
+    for i in seq(0, 8):
+        dst[i] = 0.0
+
+@instr(
+    """{dst_data} = _mm512_fmadd_pd({src_data}, {src_data}, {dst_data});""")
+def MY512_fmadd_square_pd(dst: [f64][8] @ MYAVX512D, src: [f64][8] @ MYAVX512D):
+    assert stride(dst, 0) == 1
+    assert stride(src, 0) == 1
+    for i in seq(0, 8):
+        dst[i] += src[i] * src[i]
+
+@instr(
+    """{dst_data} = _mm512_cvtps_pd({src_data});""")
+def MY512_cvtps_pd(dst: [f64][8] @ MYAVX512D, src: [f32][8] @ AVX2):
+    assert stride(dst, 0) == 1
+    assert stride(src, 0) == 1
+    for i in seq(0, 8):
+        dst[i] = src[i]
+
+@instr(
+    """{dst_data} = _mm512_cvtpd_ps({src_data});""")
+def MY512_cvtpd_ps(dst: [f32][8] @ AVX2, src: [f64][8] @ MYAVX512D):
+    assert stride(dst, 0) == 1
+    assert stride(src, 0) == 1
+    for i in seq(0, 8):
+        dst[i] = src[i]
+
+
+@instr("{out_data} = _mm512_div_pd({x_data}, {y_data});")
+def MY512_div_pd(out: [f64][8] @ MYAVX512D, x: [f64][8] @ MYAVX512D, y: [f64][8] @ MYAVX512D):
+    assert stride(out, 0) == 1
+    assert stride(x, 0) == 1
+    assert stride(y, 0) == 1
+
+    for i in seq(0, 8):
+        out[i] = x[i] / y[i]
+
+@instr("{out_data} = _mm512_sqrt_pd({x_data});")
+def MY512_sqrt_pd(out: [f64][8] @ MYAVX512D, x: [f64][8] @ MYAVX512D):
+    assert stride(out, 0) == 1
+    assert stride(x, 0) == 1
+
+    for i in seq(0, 8):
+        out[i] = sqrt(x[i])
+
+@instr("{dst_data} = _mm512_fmadd_pd(_mm512_set1_pd({src_scalar_data}), {src_vector_data}, {dst_data});")
+def MY512_fmadd_scalar_vector_pd(
+    dst: [f64][8] @ MYAVX512D,
+    src_scalar: [f64][1] @ DRAM,
+    src_vector: [f64][8] @ MYAVX512D,
+):
+    assert stride(src_vector, 0) == 1
+    assert stride(dst, 0) == 1
+
+    for i in seq(0, 8):
+        dst[i] += src_scalar[0] * src_vector[i]
+
+@instr("{dst_data} = _mm512_fnmadd_pd(_mm512_set1_pd({src_scalar_data}), {src_vector_data}, {dst_data});")
+def MY512_fnmadd_scalar_vector_pd(
+    dst: [f64][8] @ MYAVX512D,
+    src_scalar: [f64][1] @ DRAM,
+    src_vector: [f64][8] @ MYAVX512D,
+):
+    assert stride(src_vector, 0) == 1
+    assert stride(dst, 0) == 1
+
+    for i in seq(0, 8):
+        dst[i] += -src_scalar[0] * src_vector[i]
+
+
+my_avx_insts = [
+    mm256_broadcast_ss,
+    mm256_setzero_ps,
+    MY256_iadd_ps,
+    mm256_add_ps,
+    mm256_sub_ps,
+    mm256_div_ps,
+    mm256_loadu_ps,
+    mm256_storeu_ps,
+    MY256_set1_ps,
+    MY256_select14_ps,
+    MY256_select24_ps,
+    MY256_select4_ps,
+    MY512_setzero_pd,
+    MY512_fmadd_square_pd,
+    MY512_cvtps_pd,
+    MY512_cvtpd_ps,
+    MY512_div_pd,
+    MY512_sqrt_pd,
+    MY512_fmadd_scalar_vector_pd,
+    MY512_fnmadd_scalar_vector_pd,
+    MY512_imin_ps_pd,
+    MY512_imax_ps_pd,
+]
+
 
 @proc
 def exo_mean_chunk_lane_outer_loop_m256(
@@ -51,16 +272,6 @@ def exo_mean_chunk_better_m256(
             out[c, lane] = accum / divisor
 
 
-avx_f32_insts = [
-    mm256_broadcast_ss,
-    mm256_setzero_ps,
-    mm256_add_ps,
-    MY256_iadd_ps,
-    mm256_div_ps,
-    mm256_loadu_ps,
-    mm256_storeu_ps,
-]
-
 if True:
     avx = rename(exo_mean_chunk_lane_outer_loop_m256, "exo_mean_chunk_m256")
     avx = reorder_loops(avx, "lane c")
@@ -76,7 +287,7 @@ if True:
     avx = set_memory(avx, "accum", AVX2)
     avx = set_memory(avx, "tmp", AVX2)
     avx = set_memory(avx, "divisor", AVX2)
-    for inst in avx_f32_insts:
+    for inst in my_avx_insts:
         avx = replace_all(avx, inst)
     exo_mean_chunk_m256 = avx
 else:
@@ -97,8 +308,8 @@ def exo_clipped_mean_chunk_original_m256(
         chunk_count : size,
         out : f32[chunk_count, 8] @ DRAM,
         in2D : f32[chunk_count, combine_count, 8],
-        sigma_lower : f64,
-        sigma_upper : f64,
+        sigma_lower : f64[1],
+        sigma_upper : f64[1],
         max_iter : size):
 
     lower_bounds : f32[8]
@@ -110,71 +321,125 @@ def exo_clipped_mean_chunk_original_m256(
     tmp : f32[8]
     mean : f32[8]
 
+    tmp_scalar : f32[1]
+
     sum_squares : f64[8]
     stdev : f64[8]
     tmp64 : f64[8]
 
-    for lane in seq(0, 8):
-        for c in seq(0, chunk_count):
+    for c in seq(0, chunk_count):
+        for lane in seq(0, 8):
             zero[lane] = 0
-            lower_bounds[lane] = -1e100
-            upper_bounds[lane] = 1e100
+        tmp_scalar[0] = -1e100
+        for lane in seq(0, 8):
+            lower_bounds[lane] = tmp_scalar[0]
+        tmp_scalar[0] = 1e100
+        for lane in seq(0, 8):
+            upper_bounds[lane] = tmp_scalar[0]
 
-            for sigma_iter in seq(0, max_iter):
+        # Sigma clipping loop
+        for sigma_iter in seq(0, max_iter):
                 # Calculate the mean, masking away out-of-bounds values
                 # tmp = in_bounds ? 1.0 : 0.0
+            for lane in seq(0, 8):
                 accum[lane] = 0
+            for lane in seq(0, 8):
                 count[lane] = 0
-                for i in seq(0, combine_count):
+            for i in seq(0, combine_count):
+                for lane in seq(0, 8):
                     value[lane] = in2D[c, i, lane]
-                    tmp[lane] = 1.0
+                tmp_scalar[0] = 1.0
+                for lane in seq(0, 8):
+                    tmp[lane] = tmp_scalar[0]
+                for lane in seq(0, 8):
                     tmp[lane] = select(value[lane], lower_bounds[lane], zero[lane], tmp[lane])
+                for lane in seq(0, 8):
                     tmp[lane] = select(upper_bounds[lane], value[lane], zero[lane], tmp[lane])
+                for lane in seq(0, 8):
                     count[lane] += tmp[lane]
+                for lane in seq(0, 8):
                     value[lane] = select(value[lane], lower_bounds[lane], zero[lane], value[lane])
+                for lane in seq(0, 8):
                     value[lane] = select(upper_bounds[lane], value[lane], zero[lane], value[lane])
+                for lane in seq(0, 8):
                     accum[lane] += value[lane]
 
+            for lane in seq(0, 8):
                 mean[lane] = accum[lane] / count[lane]
 
                 # Calculate the sum of squared deviation, including only numbers in bound
                 # tmp = in_bounds ? square(value - mean) : 0.0
+            for lane in seq(0, 8):
                 sum_squares[lane] = 0
-                for i in seq(0, combine_count):
+            for i in seq(0, combine_count):
+                for lane in seq(0, 8):
                     value[lane] = in2D[c, i, lane]
+                for lane in seq(0, 8):
                     tmp[lane] = value[lane] - mean[lane]
+                for lane in seq(0, 8):
                     tmp[lane] = select(value[lane], lower_bounds[lane], zero[lane], tmp[lane])
+                for lane in seq(0, 8):
                     tmp[lane] = select(upper_bounds[lane], value[lane], zero[lane], tmp[lane])
-                    sum_squares[lane] += tmp[lane] * tmp[lane]
-                tmp64[lane] = count[lane]
-                tmp64[lane] = sum_squares[lane] / tmp64[lane]
+                for lane in seq(0, 8):
+                    tmp64[lane] = tmp[lane]
+                for lane in seq(0, 8):
+                    sum_squares[lane] += tmp64[lane] * tmp64[lane]
+            for lane in seq(0, 8):
+                stdev[lane] = count[lane]
+            for lane in seq(0, 8):
+                tmp64[lane] = sum_squares[lane] / stdev[lane]
+            for lane in seq(0, 8):
                 stdev[lane] = sqrt(tmp64[lane])
                 #stdev[lane] = sqrt(sum_squares[lane] / tmp64[lane])
 
-                # Set the new lower/upper bounds
+                # Set the new lower/upper bounds, but must be at least as strict as old bounds
+            for lane in seq(0, 8):
                 tmp64[lane] = mean[lane]
-                lower_bounds[lane] = tmp64[lane] - sigma_lower * stdev[lane]
-                upper_bounds[lane] = tmp64[lane] + sigma_upper * stdev[lane]
+            for lane in seq(0, 8):
+                tmp64[lane] += -sigma_lower[0] * stdev[lane]
+            for lane in seq(0, 8):
+                lower_bounds[lane] = max(lower_bounds[lane], tmp64[lane])
+            for lane in seq(0, 8):
+                tmp64[lane] = mean[lane]
+            for lane in seq(0, 8):
+                tmp64[lane] += sigma_upper[0] * stdev[lane]
+            for lane in seq(0, 8):
+                upper_bounds[lane] = min(upper_bounds[lane], tmp64[lane])
 
-            # Compute and write out the clipped mean based on the final mask bounds
+        # Compute and write out the clipped mean based on the final mask bounds
+        for lane in seq(0, 8):
             accum[lane] = 0
+        for lane in seq(0, 8):
             count[lane] = 0
-            for i in seq(0, combine_count):
+        for i in seq(0, combine_count):
+            for lane in seq(0, 8):
                 value[lane] = in2D[c, i, lane]
-                tmp[lane] = 1.0
+            tmp_scalar[0] = 1.0
+            for lane in seq(0, 8):
+                tmp[lane] = tmp_scalar[0]
+            for lane in seq(0, 8):
                 tmp[lane] = select(value[lane], lower_bounds[lane], zero[lane], tmp[lane])
+            for lane in seq(0, 8):
                 tmp[lane] = select(upper_bounds[lane], value[lane], zero[lane], tmp[lane])
+            for lane in seq(0, 8):
                 count[lane] += tmp[lane]
+            for lane in seq(0, 8):
                 value[lane] = select(value[lane], lower_bounds[lane], zero[lane], value[lane])
+            for lane in seq(0, 8):
                 value[lane] = select(upper_bounds[lane], value[lane], zero[lane], value[lane])
+            for lane in seq(0, 8):
                 accum[lane] += value[lane]
-
+        for lane in seq(0, 8):
             mean[lane] = accum[lane] / count[lane]
+        for lane in seq(0, 8):
             out[c, lane] = mean[lane]
-        # end loop for c in seq(0, chunk_count)
-    # end loop for lane in seq(0, ...)
 
 avx = rename(exo_clipped_mean_chunk_original_m256, "exo_clipped_mean_chunk_m256")
-avx = reorder_loops(avx, "lane c")
-#avx = repeat(reorder_loops)(avx, "c lane")
+for var in ("lower_bounds", "upper_bounds", "zero", "value", "accum", "count", "tmp", "mean"):
+    avx = set_memory(avx, var, AVX2)
+for var in ("sum_squares", "stdev", "tmp64"):
+    avx = set_memory(avx, var, MYAVX512D)
+for inst in my_avx_insts:
+    avx = replace_all(avx, inst)
+print(avx)
 exo_clipped_mean_chunk_m256 = avx
