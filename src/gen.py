@@ -77,6 +77,8 @@ def MY256_set1_ps(
     for i in seq(0, 8):
         dst[i] = src[0]
 
+
+### XXX RISKY WORKAROUND: this seems to match and replace patterns even where the z's don't match
 @instr(
     """{z_data} = _mm256_blendv_ps ({z_data}, {y_data}, _mm256_cmp_ps ({x_data}, {v_data}, _CMP_LT_OQ));"""
 )
@@ -96,43 +98,6 @@ def MY256_select4_ps(
 
     for i in seq(0, 8):
         z[i] = select(x[i], v[i], y[i], z[i])
-
-# XXX this doesn't seem to work, matches even when the z's don't match.
-@instr(
-    """{z_data} = _mm256_blendv_ps ({z_data}, {y_data}, _mm256_cmp_ps ({z_data}, {v_data}, _CMP_LT_OQ  ));"""
-)
-def MY256_select14_ps(
-    v: [f32][8] @ AVX2,
-    y: [f32][8] @ AVX2,
-    z: [f32][8] @ AVX2,
-):
-    # WARNING: This instruction above use a lower precision
-    #    float32 (C float) than the implementation of
-    #    the builtin which uses float64 (C double)
-    assert stride(v, 0) == 1
-    assert stride(y, 0) == 1
-    assert stride(z, 0) == 1
-
-    for i in seq(0, 8):
-        z[i] = select(z[i], v[i], y[i], z[i])
-
-@instr(
-    """{z_data} = _mm256_blendv_ps ({z_data}, {y_data}, _mm256_cmp_ps ({x_data}, {z_data}, _CMP_LT_OQ));"""
-)
-def MY256_select24_ps(
-    x: [f32][8] @ AVX2,
-    y: [f32][8] @ AVX2,
-    z: [f32][8] @ AVX2,
-):
-    # WARNING: This instruction above use a lower precision
-    #    float32 (C float) than the implementation of
-    #    the builtin which uses float64 (C double)
-    assert stride(x, 0) == 1
-    assert stride(y, 0) == 1
-    assert stride(z, 0) == 1
-
-    for i in seq(0, 8):
-        z[i] = select(x[i], z[i], y[i], z[i])
 
 @instr(
     """{dst_data} = _mm512_setzero_pd();""")
@@ -209,6 +174,7 @@ def MY512_fnmadd_scalar_vector_pd(
 
 
 my_avx_insts = [
+    avx2_reg_copy_ps,
     mm256_broadcast_ss,
     mm256_setzero_ps,
     MY256_iadd_ps,
@@ -218,8 +184,6 @@ my_avx_insts = [
     mm256_loadu_ps,
     mm256_storeu_ps,
     MY256_set1_ps,
-    MY256_select14_ps,
-    MY256_select24_ps,
     MY256_select4_ps,
     MY512_setzero_pd,
     MY512_fmadd_square_pd,
@@ -303,7 +267,7 @@ def sin_8(out : f32[8] @ DRAM, in_ : f32[8] @ DRAM):
         out[lane] = sin(in_[lane])
 
 @proc
-def exo_clipped_mean_chunk_original_m256(
+def exo_clipped_mean_chunk_m256(
         combine_count : size,
         chunk_count : size,
         out : f32[chunk_count, 8] @ DRAM,
@@ -358,11 +322,13 @@ def exo_clipped_mean_chunk_original_m256(
                 for lane in seq(0, 8):
                     count[lane] += tmp[lane]
                 for lane in seq(0, 8):
-                    value[lane] = select(value[lane], lower_bounds[lane], zero[lane], value[lane])
+                    tmp[lane] = value[lane]
                 for lane in seq(0, 8):
-                    value[lane] = select(upper_bounds[lane], value[lane], zero[lane], value[lane])
+                    tmp[lane] = select(value[lane], lower_bounds[lane], zero[lane], tmp[lane])
                 for lane in seq(0, 8):
-                    accum[lane] += value[lane]
+                    tmp[lane] = select(upper_bounds[lane], value[lane], zero[lane], tmp[lane])
+                for lane in seq(0, 8):
+                    accum[lane] += tmp[lane]
 
             for lane in seq(0, 8):
                 mean[lane] = accum[lane] / count[lane]
@@ -424,17 +390,19 @@ def exo_clipped_mean_chunk_original_m256(
             for lane in seq(0, 8):
                 count[lane] += tmp[lane]
             for lane in seq(0, 8):
-                value[lane] = select(value[lane], lower_bounds[lane], zero[lane], value[lane])
+                tmp[lane] = value[lane]
             for lane in seq(0, 8):
-                value[lane] = select(upper_bounds[lane], value[lane], zero[lane], value[lane])
+                tmp[lane] = select(value[lane], lower_bounds[lane], zero[lane], tmp[lane])
             for lane in seq(0, 8):
-                accum[lane] += value[lane]
+                tmp[lane] = select(upper_bounds[lane], value[lane], zero[lane], tmp[lane])
+            for lane in seq(0, 8):
+                accum[lane] += tmp[lane]
         for lane in seq(0, 8):
             mean[lane] = accum[lane] / count[lane]
         for lane in seq(0, 8):
             out[c, lane] = mean[lane]
 
-avx = rename(exo_clipped_mean_chunk_original_m256, "exo_clipped_mean_chunk_m256")
+avx = rename(exo_clipped_mean_chunk_m256, "exo_clipped_mean_chunk_m256")
 for var in ("lower_bounds", "upper_bounds", "zero", "value", "accum", "count", "tmp", "mean"):
     avx = set_memory(avx, var, AVX2)
 for var in ("sum_squares", "stdev", "tmp64"):
