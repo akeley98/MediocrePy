@@ -5,6 +5,9 @@ from exo.stdlib.scheduling import *
 from exo.platforms.x86 import *
 from exo.stdlib.stdlib import vectorize
 from exo.memory import Memory, MemGenError
+from exo.extern import Extern
+from exo.libs.externs import sin, sqrt, fminf, fmaxf
+
 
 class MYAVX512D(Memory):
     @classmethod
@@ -57,7 +60,7 @@ def MY512_imin_ps_pd(out: [f32][8] @ AVX2, y: [f64][8] @ MYAVX512D):
     assert stride(y, 0) == 1
 
     for i in seq(0, 8):
-        out[i] = min(out[i], y[i])
+        out[i] = fminf(out[i], y[i])
 
 @instr("{out_data} = _mm256_max_ps({out_data}, _mm512_cvtpd_ps({y_data}));")
 def MY512_imax_ps_pd(out: [f32][8] @ AVX2, y: [f64][8] @ MYAVX512D):
@@ -65,7 +68,7 @@ def MY512_imax_ps_pd(out: [f32][8] @ AVX2, y: [f64][8] @ MYAVX512D):
     assert stride(y, 0) == 1
 
     for i in seq(0, 8):
-        out[i] = max(out[i], y[i])
+        out[i] = fmaxf(out[i], y[i])
 
 @instr("{dst_data} = _mm256_set1_ps({src_data});")
 def MY256_set1_ps(
@@ -267,7 +270,7 @@ def sin_8(out : f32[8] @ DRAM, in_ : f32[8] @ DRAM):
         out[lane] = sin(in_[lane])
 
 @proc
-def exo_clipped_mean_chunk_m256(
+def exo_clipped_mean_chunk_original(
         combine_count : size,
         chunk_count : size,
         out : f32[chunk_count, 8] @ DRAM,
@@ -364,13 +367,13 @@ def exo_clipped_mean_chunk_m256(
             for lane in seq(0, 8):
                 tmp64[lane] += -sigma_lower[0] * stdev[lane]
             for lane in seq(0, 8):
-                lower_bounds[lane] = max(lower_bounds[lane], tmp64[lane])
+                lower_bounds[lane] = fmaxf(lower_bounds[lane], tmp64[lane])
             for lane in seq(0, 8):
                 tmp64[lane] = mean[lane]
             for lane in seq(0, 8):
                 tmp64[lane] += sigma_upper[0] * stdev[lane]
             for lane in seq(0, 8):
-                upper_bounds[lane] = min(upper_bounds[lane], tmp64[lane])
+                upper_bounds[lane] = fminf(upper_bounds[lane], tmp64[lane])
 
         # Compute and write out the clipped mean based on the final mask bounds
         for lane in seq(0, 8):
@@ -402,7 +405,7 @@ def exo_clipped_mean_chunk_m256(
         for lane in seq(0, 8):
             out[c, lane] = mean[lane]
 
-avx = rename(exo_clipped_mean_chunk_m256, "exo_clipped_mean_chunk_m256")
+avx = rename(exo_clipped_mean_chunk_original, "exo_clipped_mean_chunk_m256")
 for var in ("lower_bounds", "upper_bounds", "zero", "value", "accum", "count", "tmp", "mean"):
     avx = set_memory(avx, var, AVX2)
 for var in ("sum_squares", "stdev", "tmp64"):
@@ -410,4 +413,4 @@ for var in ("sum_squares", "stdev", "tmp64"):
 for inst in my_avx_insts:
     avx = replace_all(avx, inst)
 print(avx)
-exo_clipped_mean_chunk_m256 = avx
+# exo_clipped_mean_chunk_m256 = avx

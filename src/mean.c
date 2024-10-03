@@ -338,18 +338,19 @@ static int clipped_loop_function(
             );
             return E2BIG;
         } else if (use_exo) {
-            if (0) {
-                float combine_count_f32 = command.dimension.combine_count;
-                exo_mean_chunk_m256(0, command.dimension.combine_count,
-                                    &combine_count_f32,
-                                    chunk_count,
-                                    (float*)temp_output,
-                                    (const float*)command.input_chunks);
+            double sigma_lower_64 = arguments_ptr->sigma_lower;
+            double sigma_upper_64 = arguments_ptr->sigma_upper;
+            if (MEDIOCRE_ENABLE_FMA) {
+                exo_clipped_mean_chunk_m256(
+                        0,
+                        command.dimension.combine_count,
+                        chunk_count,
+                        (float*)temp_output,
+                        (const float*)command.input_chunks,
+                        &sigma_lower_64, &sigma_upper_64, max_iter);
             }
             else {
-                double sigma_lower_64 = arguments_ptr->sigma_lower;
-                double sigma_upper_64 = arguments_ptr->sigma_upper;
-                exo_clipped_mean_chunk_m256(
+                exo_clipped_mean_chunk_original(
                         0,
                         command.dimension.combine_count,
                         chunk_count,
