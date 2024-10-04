@@ -241,7 +241,7 @@ static void test_median(
                 }
             }
             double sd = sqrt(ss / current_count);
-            float new_lb = (float)fp64_fma(-sigma_lower, sd, median;
+            float new_lb = (float)fp64_fma(-sigma_lower, sd, median);
             float new_ub = (float)fp64_fma(+sigma_upper, sd, median);
             
             lower_bound = (new_lb < lower_bound) ? lower_bound : new_lb;
