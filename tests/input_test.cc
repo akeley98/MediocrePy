@@ -429,9 +429,9 @@ static void test_2D() noexcept {
 }
 
 int main() {
-    generator = new_random();
+    generator = new_random1(1337);
     seed = get_seed(generator);
-    for (int i = 0; i < 80; ++i) {
+    for (int i = 0; i < MEDIOCRE_TEST_COUNT; ++i) {
         for (int j = 0; j < 12; ++j) {
             test_2D();
         }
