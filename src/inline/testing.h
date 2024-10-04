@@ -24,6 +24,8 @@
 #include <stdio.h>
 #include <sys/timeb.h>
 
+#define MEDIOCRE_TEST_COUNT 24
+
 #ifdef noexcept
 #error "noexcept keyword redefined as macro"
 #endif

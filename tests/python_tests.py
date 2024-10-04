@@ -456,8 +456,8 @@ mediocre library (implemented in C). The library's results are being
 compared to results calculated using pure Python. Calculating these
 Python results takes up almost all of the testing time.\n""")
     global seed, rand
-    while 1:
-        seed = hash(os.urandom(8))
+    for i in range(10):
+        seed = 1337 + i
         rand = random.Random(seed)
         
         print("Seed = ", seed)

@@ -364,7 +364,7 @@ static void test_mean(
 int main() {
     generator = new_random1(1337);
     
-    for (size_t i = 0; i < 2000; ++i) {
+    for (size_t i = 0; i < MEDIOCRE_TEST_COUNT; ++i) {
         size_t array_count = random_dist_u32(
             generator, min_array_count, max_array_count);
         size_t bin_count = random_dist_u32(
