@@ -1,0 +1,40 @@
+# Change these commands if you want to change the C and C++ compilers.
+# bin/ is a bit of a misnomer since I'm really compiling to assembly instead of
+# object files, so that I can see what the hell the compiler is actually up to.
+rule cc
+  depfile = $out.d
+  command = clang-18 -fdiagnostics-color=always $in -o $out -fPIC -O3 -S -std=c99 -mavx2 -mavx512f -mfma -I include -I src/inline -D_POSIX_C_SOURCE=201112L -Wall -Wextra -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=implicit-function-declaration -Wno-missing-field-initializers -g -MD -MF $out.d
+
+rule cxx
+  depfile = $out.d
+  command = clang++-18 -fdiagnostics-color=always $in -o $out -fPIC -O2 -S -std=c++11 -mavx2 -mavx512f -mfma -I include -I src/inline -D_POSIX_C_SOURCE=201112L -Wall -Wextra -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=implicit-function-declaration -Wno-missing-field-initializers -g -MD -MF $out.d
+
+rule LinkLib
+  command = clang++-18 -fPIC -lm -lpthread -shared $in -o $out
+
+rule LinkTest
+  command = clang++-18 -lpthread $in -o $out
+
+rule exocc
+  command = exocc -o exo_file --stem exo_file $in
+
+build all: phony bin/mediocre.so bin/mean_test bin/median_test bin/input_test
+
+# This build rule won't work for more than 1 exo file (how to pass --stem???)
+build exo_file/exo_file.c exo_file/exo_file.h: exocc src/gen.py
+
+# bin/input.s takes up like 90% of the compile time and 90% of the space in the # final .so file, but I NEED the delicious C++ templates!
+build bin/exo_file.s: cc exo_file/exo_file.c
+build bin/combine.s: cc src/combine.c || exo_file/exo_file.h
+build bin/mean.s: cc src/mean.c || exo_file/exo_file.h
+build bin/median.s: cc src/median.c || exo_file/exo_file.h
+build bin/input.s: cxx src/input.cc || exo_file/exo_file.h
+build bin/testing.s: cxx src/testing.cc || exo_file/exo_file.h
+build bin/mean_test.s: cc tests/mean_test.c || exo_file/exo_file.h
+build bin/median_test.s: cc tests/median_test.c || exo_file/exo_file.h
+build bin/input_test.s: cxx tests/input_test.cc || exo_file/exo_file.h
+
+build bin/mediocre.so: LinkLib bin/exo_file.s bin/combine.s bin/mean.s bin/median.s bin/input.s
+build bin/mean_test: LinkTest bin/exo_file.s bin/combine.s bin/mean.s bin/mean_test.s bin/input.s bin/testing.s
+build bin/median_test: LinkTest bin/exo_file.s bin/combine.s bin/median.s bin/median_test.s bin/input.s bin/testing.s
+build bin/input_test: LinkTest bin/exo_file.s bin/combine.s bin/mean.s bin/input_test.s bin/input.s bin/testing.s
