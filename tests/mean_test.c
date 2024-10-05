@@ -272,7 +272,7 @@ static void test_mean(
     printf("thread_count = %i\n", thread_count);
     ftime(&timer_begin);
     
-    status = mediocre_combine(
+    status = mediocre_combine_destroy(
         output_pointer,
         u16_input(
             (uint16_t const* const*)input_pointers,
