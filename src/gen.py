@@ -6,7 +6,67 @@ from exo.platforms.x86 import *
 from exo.stdlib.stdlib import vectorize
 from exo.memory import Memory, MemGenError
 from exo.extern import Extern
-from exo.libs.externs import sin, sqrt, fminf, fmaxf
+from exo.libs.externs import sin, fmaxf
+
+
+try:
+    from exo.libs.externs import fminf, sqrt
+except ImportError:
+    class _FminF(Extern):
+        def __init__(self):
+            super().__init__("fminf")
+
+        def typecheck(self, args):
+            if len(args) != 2:
+                raise _EErr(f"expected 2 argument, got {len(args)}")
+
+            atyp = args[0].type
+            if not atyp.is_real_scalar():
+                raise _EErr(
+                    f"expected argument 2 to be a real scalar value, but "
+                    f"got type {atyp}"
+                )
+            return atyp
+
+        def globl(self, prim_type):
+            return "#include <math.h>"
+
+        def interpret(self, args):
+            return math.fminf(args[0], args[1])
+
+        def compile(self, args, prim_type):
+            return f"fminf(({prim_type})({args[0]}), ({prim_type})({args[1]}))"
+
+    fminf = _FminF()
+
+
+    class _Sqrt(Extern):
+        def __init__(self):
+            super().__init__("sqrt")
+
+        def typecheck(self, args):
+            if len(args) != 1:
+                raise _EErr(f"expected 1 argument, got {len(args)}")
+
+            atyp = args[0].type
+            if not atyp.is_real_scalar():
+                raise _EErr(
+                    f"expected argument 1 to be a real scalar value, but "
+                    f"got type {atyp}"
+                )
+            return atyp
+
+        def globl(self, prim_type):
+            return "#include <math.h>"
+
+        def interpret(self, args):
+            return math.sqrt(args[0])
+
+        def compile(self, args, prim_type):
+            return f"sqrt(({prim_type})({args[0]}))"
+
+
+    sqrt = _Sqrt()
 
 
 class MYAVX512D(Memory):
@@ -45,7 +105,6 @@ class MYAVX512D(Memory):
             idxs = "[" + "][".join(idxs) + "]"
         return f"{baseptr}{idxs}"
 
-
 @instr("{out_data} = _mm256_add_ps({out_data}, {y_data});")
 def MY256_iadd_ps(out: [f32][8] @ AVX2, y: [f32][8] @ AVX2):
     assert stride(out, 0) == 1
@@ -54,16 +113,16 @@ def MY256_iadd_ps(out: [f32][8] @ AVX2, y: [f32][8] @ AVX2):
     for i in seq(0, 8):
         out[i] += y[i]
 
-@instr("{out_data} = _mm256_min_ps({out_data}, _mm512_cvtpd_ps({y_data}));")
-def MY512_imin_ps_pd(out: [f32][8] @ AVX2, y: [f64][8] @ MYAVX512D):
+@instr("{out_data} = _mm256_min_ps({out_data}, {y_data});")
+def MY256_imin_ps(out: [f32][8] @ AVX2, y: [f32][8] @ AVX2):
     assert stride(out, 0) == 1
     assert stride(y, 0) == 1
 
     for i in seq(0, 8):
         out[i] = fminf(out[i], y[i])
 
-@instr("{out_data} = _mm256_max_ps({out_data}, _mm512_cvtpd_ps({y_data}));")
-def MY512_imax_ps_pd(out: [f32][8] @ AVX2, y: [f64][8] @ MYAVX512D):
+@instr("{out_data} = _mm256_max_ps({out_data}, {y_data});")
+def MY256_imax_ps(out: [f32][8] @ AVX2, y: [f32][8] @ AVX2):
     assert stride(out, 0) == 1
     assert stride(y, 0) == 1
 
@@ -81,7 +140,7 @@ def MY256_set1_ps(
         dst[i] = src[0]
 
 
-### XXX RISKY WORKAROUND: this seems to match and replace patterns even where the z's don't match
+### XXX RISKY WORKAROUND: this seems to match and replace patterns even where the z's don't match (fixed in yam branch?)
 @instr(
     """{z_data} = _mm256_blendv_ps ({z_data}, {y_data}, _mm256_cmp_ps ({x_data}, {v_data}, _CMP_LT_OQ));"""
 )
@@ -196,8 +255,8 @@ my_avx_insts = [
     MY512_sqrt_pd,
     MY512_fmadd_scalar_vector_pd,
     MY512_fnmadd_scalar_vector_pd,
-    MY512_imin_ps_pd,
-    MY512_imax_ps_pd,
+    MY256_imin_ps,
+    MY256_imax_ps,
 ]
 
 
@@ -240,17 +299,18 @@ def exo_mean_chunk_better_m256(
 
 
 if True:
+    orig = exo_mean_chunk_lane_outer_loop_m256
     avx = rename(exo_mean_chunk_lane_outer_loop_m256, "exo_mean_chunk_m256")
     avx = reorder_loops(avx, "lane c")
     avx = lift_alloc(avx, "accum")
     avx = lift_alloc(avx, "tmp")
     avx = lift_alloc(avx, "divisor")
-    avx = fission(avx, avx.find("accum[_] = _").after())
-    avx = fission(avx, avx.find("for i in _:_").after())
-    avx = fission(avx, avx.find("divisor[lane] = _").after())
-    avx = fission(avx, avx.find("tmp[lane] = _ #1").after())
+    avx = fission(avx, orig.find("accum[_] = _").after())
+    avx = fission(avx, orig.find("for i in _:_").after())
+    avx = fission(avx, orig.find("divisor[lane] = _").after())
+    avx = fission(avx, orig.find("tmp[lane] = _ #1").after())
     avx = reorder_loops(avx, "lane i")
-    avx = fission(avx, avx.find("tmp[lane] = _").after())
+    avx = fission(avx, orig.find("tmp[lane] = _").after())
     avx = set_memory(avx, "accum", AVX2)
     avx = set_memory(avx, "tmp", AVX2)
     avx = set_memory(avx, "divisor", AVX2)
@@ -367,13 +427,17 @@ def exo_clipped_mean_chunk_original(
             for lane in seq(0, 8):
                 tmp64[lane] += -sigma_lower[0] * stdev[lane]
             for lane in seq(0, 8):
-                lower_bounds[lane] = fmaxf(lower_bounds[lane], tmp64[lane])
+                tmp[lane] = tmp64[lane]
+            for lane in seq(0, 8):
+                lower_bounds[lane] = fmaxf(lower_bounds[lane], tmp[lane])
             for lane in seq(0, 8):
                 tmp64[lane] = mean[lane]
             for lane in seq(0, 8):
                 tmp64[lane] += sigma_upper[0] * stdev[lane]
             for lane in seq(0, 8):
-                upper_bounds[lane] = fminf(upper_bounds[lane], tmp64[lane])
+                tmp[lane] = tmp64[lane]
+            for lane in seq(0, 8):
+                upper_bounds[lane] = fminf(upper_bounds[lane], tmp[lane])
 
         # Compute and write out the clipped mean based on the final mask bounds
         for lane in seq(0, 8):
@@ -412,5 +476,4 @@ for var in ("sum_squares", "stdev", "tmp64"):
     avx = set_memory(avx, var, MYAVX512D)
 for inst in my_avx_insts:
     avx = replace_all(avx, inst)
-print(avx)
 # exo_clipped_mean_chunk_m256 = avx
