@@ -22,6 +22,7 @@ build all: phony bin/mediocre.so bin/mean_test bin/median_test bin/input_test
 
 # This build rule won't work for more than 1 exo file (how to pass --stem???)
 build exo_file/exo_file.c exo_file/exo_file.h: exocc src/gen.py
+  depfile = exo_file/exo_file.d
 
 # bin/input.s takes up like 90% of the compile time and 90% of the space in the # final .so file, but I NEED the delicious C++ templates!
 build bin/exo_file.s: cc exo_file/exo_file.c
