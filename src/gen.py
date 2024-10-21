@@ -4,8 +4,8 @@ from exo import *
 from exo.stdlib.scheduling import *
 from exo.platforms.x86 import *
 from exo.stdlib.stdlib import vectorize
-from exo.memory import Memory, MemGenError
-from exo.extern import Extern
+from exo.core.memory import Memory, MemGenError
+from exo.core.extern import Extern
 from exo.libs.externs import sin, fmaxf
 
 
