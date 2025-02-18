@@ -7,6 +7,7 @@ from exo.stdlib.stdlib import vectorize
 from exo.core.memory import Memory, MemGenError
 from exo.core.extern import Extern
 from exo.libs.externs import sin, fmaxf
+from exo.libs.memories import DRAM_STACK
 
 
 try:
@@ -348,7 +349,7 @@ def exo_clipped_mean_chunk_original(
     tmp : f32[8]
     mean : f32[8]
 
-    tmp_scalar : f32[1]
+    exo_tmp_scalar : f32[1] @ DRAM_STACK
 
     sum_squares : f64[8]
     stdev : f64[8]
@@ -357,12 +358,12 @@ def exo_clipped_mean_chunk_original(
     for c in seq(0, chunk_count):
         for lane in seq(0, 8):
             zero[lane] = 0
-        tmp_scalar[0] = -1e100
+        exo_tmp_scalar[0] = -1e100
         for lane in seq(0, 8):
-            lower_bounds[lane] = tmp_scalar[0]
-        tmp_scalar[0] = 1e100
+            lower_bounds[lane] = exo_tmp_scalar[0]
+        exo_tmp_scalar[0] = 1e100
         for lane in seq(0, 8):
-            upper_bounds[lane] = tmp_scalar[0]
+            upper_bounds[lane] = exo_tmp_scalar[0]
 
         # Sigma clipping loop
         for sigma_iter in seq(0, max_iter):
@@ -375,9 +376,9 @@ def exo_clipped_mean_chunk_original(
             for i in seq(0, combine_count):
                 for lane in seq(0, 8):
                     value[lane] = in2D[c, i, lane]
-                tmp_scalar[0] = 1.0
+                exo_tmp_scalar[0] = 1.0
                 for lane in seq(0, 8):
-                    tmp[lane] = tmp_scalar[0]
+                    tmp[lane] = exo_tmp_scalar[0]
                 for lane in seq(0, 8):
                     tmp[lane] = select(value[lane], lower_bounds[lane], zero[lane], tmp[lane])
                 for lane in seq(0, 8):
@@ -447,9 +448,9 @@ def exo_clipped_mean_chunk_original(
         for i in seq(0, combine_count):
             for lane in seq(0, 8):
                 value[lane] = in2D[c, i, lane]
-            tmp_scalar[0] = 1.0
+            exo_tmp_scalar[0] = 1.0
             for lane in seq(0, 8):
-                tmp[lane] = tmp_scalar[0]
+                tmp[lane] = exo_tmp_scalar[0]
             for lane in seq(0, 8):
                 tmp[lane] = select(value[lane], lower_bounds[lane], zero[lane], tmp[lane])
             for lane in seq(0, 8):
@@ -477,3 +478,4 @@ for var in ("sum_squares", "stdev", "tmp64"):
 for inst in my_avx_insts:
     avx = replace_all(avx, inst)
 # exo_clipped_mean_chunk_m256 = avx
+print(avx)

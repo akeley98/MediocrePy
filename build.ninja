@@ -16,7 +16,7 @@ rule LinkTest
   command = clang++-18 -lpthread $in -o $out
 
 rule exocc
-  command = exocc -o exo_file --stem exo_file $in
+  command = exocc -o exo_file --stem exo_file $in && echo $out
 
 build all: phony bin/mediocre.so bin/mean_test bin/median_test bin/input_test
 
